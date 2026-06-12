@@ -9,13 +9,15 @@
 // STOCK_TICKER_CONFIG / STOCK_TICKER_CACHE env vars override the file paths
 // (used by the test suite to run hermetically).
 
+import { spawn } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const CONFIG_PATH = process.env.STOCK_TICKER_CONFIG ?? join(homedir(), '.claude', 'stock-ticker.json');
 const CACHE_PATH = process.env.STOCK_TICKER_CACHE ?? join(tmpdir(), 'claude-stock-ticker-cache.json');
+const STATE_PATH = process.env.STOCK_TICKER_STATE ?? join(tmpdir(), 'claude-stock-ticker-state.json');
 
 export const DEFAULTS = {
   symbols: ['SPY', 'NVDA', 'AAPL', 'TSLA'],
@@ -24,6 +26,8 @@ export const DEFAULTS = {
   sparkPoints: 8,
   showSession: true,
   hyperlink: true,
+  nextButton: true,
+  nextPort: 41214,
 };
 
 const RESET = '\x1b[0m';
@@ -107,10 +111,30 @@ export function sparkline(closes, points) {
 }
 
 // OSC 8 hyperlink — clickable in supporting terminals, invisible elsewhere.
-export function linkify(text, symbol, enabled) {
+export function linkify(text, url, enabled) {
   if (!enabled) return text;
-  const url = `https://finance.yahoo.com/quote/${encodeURIComponent(symbol)}`;
   return `\x1b]8;;${url}\x1b\\${text}\x1b]8;;\x1b\\`;
+}
+
+// Symbol shown = wall-clock rotation plus the manual ▶ offset, wrapping.
+export function pickIndex(nowMs, rotateSeconds, offset, count) {
+  return (Math.floor(nowMs / 1000 / rotateSeconds) + offset) % count;
+}
+
+// Make sure the ▶ click handler is up; spawn it detached if the ping fails.
+async function ensureListener(port) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 250);
+  try {
+    await fetch(`http://127.0.0.1:${port}/ping`, { signal: ctrl.signal });
+    return;
+  } catch {
+    // Not running yet.
+  } finally {
+    clearTimeout(timer);
+  }
+  const listener = fileURLToPath(new URL('./next-listener.mjs', import.meta.url));
+  spawn(process.execPath, [listener, String(port)], { detached: true, stdio: 'ignore' }).unref();
 }
 
 export function marketDot(quote, nowMs = Date.now()) {
@@ -127,7 +151,11 @@ export function marketDot(quote, nowMs = Date.now()) {
 }
 
 export function formatQuote(symbol, quote, position, nowMs = Date.now()) {
-  const name = linkify(`${BOLD}${symbol}${RESET}`, symbol, position.hyperlink);
+  const name = linkify(
+    `${BOLD}${symbol}${RESET}`,
+    `https://finance.yahoo.com/quote/${encodeURIComponent(symbol)}`,
+    position.hyperlink,
+  );
   if (!quote) return `${DIM}${name} —${RESET}`;
 
   const cur = CURRENCY_SYMBOLS[quote.currency] ?? `${quote.currency} `;
@@ -161,7 +189,8 @@ export async function main() {
   const session = await readStdin();
 
   const rotateSeconds = Math.max(Number(config.rotateSeconds) || DEFAULTS.rotateSeconds, 1);
-  const index = Math.floor(Date.now() / 1000 / rotateSeconds) % symbols.length;
+  const offset = Math.max(Number(readJson(STATE_PATH)?.offset) || 0, 0);
+  const index = pickIndex(Date.now(), rotateSeconds, offset, symbols.length);
   const symbol = symbols[index];
 
   const cache = readJson(CACHE_PATH) ?? {};
@@ -186,12 +215,19 @@ export async function main() {
   }
   const quote = cache[symbol];
 
-  const left = formatQuote(symbol, quote, {
+  let left = formatQuote(symbol, quote, {
     index,
     total: symbols.length,
     sparkPoints: Math.max(Number(config.sparkPoints) || DEFAULTS.sparkPoints, 2),
     hyperlink: config.hyperlink !== false,
   });
+
+  // ▶ next-symbol button: an OSC 8 link to the local click listener.
+  if (symbols.length > 1 && config.nextButton !== false && config.hyperlink !== false) {
+    const port = Number(config.nextPort) || DEFAULTS.nextPort;
+    await ensureListener(port);
+    left += ` ${linkify(`${DIM}▶${RESET}`, `http://127.0.0.1:${port}/next`, true)}`;
+  }
 
   let right = '';
   if (config.showSession !== false) {

@@ -6,9 +6,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { sparkline, linkify, marketDot, formatQuote } from '../scripts/ticker.mjs';
+import { sparkline, linkify, marketDot, formatQuote, pickIndex } from '../scripts/ticker.mjs';
 
 const SCRIPT = fileURLToPath(new URL('../scripts/ticker.mjs', import.meta.url));
+const LISTENER = fileURLToPath(new URL('../scripts/next-listener.mjs', import.meta.url));
 
 const GREEN = '\x1b[32m';
 const RED = '\x1b[31m';
@@ -56,13 +57,27 @@ test('linkify: disabled returns text untouched', () => {
   assert.equal(linkify('AAPL', 'AAPL', false), 'AAPL');
 });
 
-test('linkify: wraps text in an OSC 8 link to the Yahoo quote page', () => {
-  const out = linkify('AAPL', 'AAPL', true);
+test('linkify: wraps text in an OSC 8 link to the given URL', () => {
+  const out = linkify('AAPL', 'https://finance.yahoo.com/quote/AAPL', true);
   assert.equal(out, '\x1b]8;;https://finance.yahoo.com/quote/AAPL\x1b\\AAPL\x1b]8;;\x1b\\');
 });
 
-test('linkify: URL-encodes index symbols like ^GSPC', () => {
-  assert.ok(linkify('^GSPC', '^GSPC', true).includes('/quote/%5EGSPC'));
+test('formatQuote: URL-encodes index symbols like ^GSPC in the link', () => {
+  const out = formatQuote('^GSPC', quoteFixture(), { ...POSITION, hyperlink: true }, NOW);
+  assert.ok(out.includes('/quote/%5EGSPC'));
+});
+
+test('pickIndex: rotates with the wall clock', () => {
+  const i0 = pickIndex(0, 10, 0, 4);
+  const i1 = pickIndex(10_000, 10, 0, 4);
+  assert.equal(i0, 0);
+  assert.equal(i1, 1);
+});
+
+test('pickIndex: manual offset advances and wraps', () => {
+  assert.equal(pickIndex(0, 10, 1, 4), 1);
+  assert.equal(pickIndex(0, 10, 4, 4), 0);
+  assert.equal(pickIndex(30_000, 10, 2, 4), 1); // (3 + 2) % 4
 });
 
 test('marketDot: green and blinking during regular trading hours', () => {
@@ -164,4 +179,44 @@ test('integration: full script renders ticker and session info from stdin', (t) 
   assert.equal(garbage.status, 0, garbage.stderr);
   assert.ok(garbage.stdout.includes('TEST'));
   assert.ok(!garbage.stdout.includes('TestModel'));
+});
+
+// End-to-end: the ▶ click listener bumps the rotation offset in the state file.
+test('integration: next-listener increments offset on /next', async (t) => {
+  const { spawn } = await import('node:child_process');
+  const { readFileSync } = await import('node:fs');
+
+  const dir = mkdtempSync(join(tmpdir(), 'ticker-listener-test-'));
+  const statePath = join(dir, 'state.json');
+  const port = 41999;
+
+  const child = spawn(process.execPath, [LISTENER, String(port)], {
+    env: { ...process.env, STOCK_TICKER_STATE: statePath },
+    stdio: 'ignore',
+  });
+  t.after(() => {
+    child.kill();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // Wait for the server to come up.
+  const deadline = Date.now() + 5000;
+  let up = false;
+  while (Date.now() < deadline && !up) {
+    try {
+      await fetch(`http://127.0.0.1:${port}/ping`);
+      up = true;
+    } catch {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
+  assert.ok(up, 'listener did not start within 5s');
+
+  const res1 = await fetch(`http://127.0.0.1:${port}/next`);
+  assert.equal(res1.status, 200);
+  await fetch(`http://127.0.0.1:${port}/next`);
+  assert.equal(JSON.parse(readFileSync(statePath, 'utf8')).offset, 2);
+
+  const missing = await fetch(`http://127.0.0.1:${port}/nope`);
+  assert.equal(missing.status, 404);
 });

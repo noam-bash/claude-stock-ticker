@@ -26,7 +26,9 @@ All user preferences live in `~/.claude/stock-ticker.json`:
   "cacheTtlSeconds": 60,
   "sparkPoints": 8,
   "showSession": true,
-  "hyperlink": true
+  "hyperlink": true,
+  "nextButton": true,
+  "nextPort": 41214
 }
 ```
 
@@ -36,6 +38,11 @@ All user preferences live in `~/.claude/stock-ticker.json`:
 - `sparkPoints` — width of the intraday sparkline in characters.
 - `showSession` — set `false` to hide the model/context segment.
 - `hyperlink` — the symbol is an OSC 8 link to its Yahoo Finance page (Ctrl/Cmd+click). Set `false` if the user's terminal garbles the escapes; if links show but aren't clickable, suggest launching Claude Code with `FORCE_HYPERLINK=1`.
+- `nextButton` / `nextPort` — the trailing `▶` advances rotation manually via a localhost listener on `nextPort`. Requires `hyperlink` and 2+ symbols; set `nextButton` to `false` to hide it.
+
+### Next symbol (`/ticker next`)
+
+Increment the `offset` field (default 0) in the state file — `%TEMP%/claude-stock-ticker-state.json` (or `$TMPDIR`) — same effect as clicking `▶`.
 
 Every key is optional; the script falls back to the defaults shown above.
 
