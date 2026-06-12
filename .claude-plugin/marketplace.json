@@ -1,0 +1,17 @@
+{
+  "name": "stock-ticker-marketplace",
+  "owner": {
+    "name": "Noam Barkay",
+    "email": "noambarkay95@gmail.com"
+  },
+  "metadata": {
+    "description": "Live stock ticker for the Claude Code status line."
+  },
+  "plugins": [
+    {
+      "name": "stock-ticker",
+      "source": "./",
+      "description": "Live stock ticker in your Claude Code status line — rotating symbols with price, % change, and an intraday sparkline."
+    }
+  ]
+}
