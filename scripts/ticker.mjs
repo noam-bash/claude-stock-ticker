@@ -165,9 +165,12 @@ export function formatQuote(symbol, quote, position, nowMs = Date.now()) {
 
 export async function main() {
   const config = { ...DEFAULTS, ...(readJson(CONFIG_PATH) ?? {}) };
-  const symbols = (Array.isArray(config.symbols) && config.symbols.length ? config.symbols : DEFAULTS.symbols)
+  const cleaned = (Array.isArray(config.symbols) ? config.symbols : [])
     .map((s) => String(s).trim().toUpperCase())
     .filter(Boolean);
+  // Fall back to defaults only AFTER cleaning, so a config of blank/whitespace
+  // entries doesn't survive the length check and leave an empty list.
+  const symbols = cleaned.length ? cleaned : DEFAULTS.symbols;
 
   const session = await readStdin();
 

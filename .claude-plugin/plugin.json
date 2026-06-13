@@ -1,7 +1,7 @@
 {
   "name": "stock-ticker",
   "description": "Live stock ticker in your Claude Code status line — rotating symbols with price, % change, and an intraday sparkline, plus your model and context usage.",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "author": {
     "name": "Noam Barkay",
     "email": "noambarkay95@gmail.com"

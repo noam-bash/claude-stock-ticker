@@ -210,3 +210,18 @@ test('integration: no button is rendered (no ▶ or click transport)', (t) => {
   assert.ok(!res.stdout.includes('ccbtn://'));
   assert.ok(!res.stdout.includes('127.0.0.1'));
 });
+
+// Blank/whitespace-only symbols must not survive into an empty list (which
+// rendered a bold "undefined" linking to /quote/undefined).
+test('integration: whitespace-only symbols fall back to defaults, never "undefined"', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'ticker-blank-test-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const configPath = join(dir, 'config.json');
+  writeFileSync(configPath, JSON.stringify({ symbols: ['  ', ''], showSession: false }));
+  const env = { ...process.env, STOCK_TICKER_CONFIG: configPath, STOCK_TICKER_CACHE: join(dir, 'cache.json') };
+
+  const res = spawnSync(process.execPath, [SCRIPT], { input: '{}', env, encoding: 'utf8' });
+  assert.equal(res.status, 0, res.stderr);
+  assert.ok(!res.stdout.toLowerCase().includes('undefined'));
+  assert.ok(!res.stdout.includes('quote/undefined'));
+});
