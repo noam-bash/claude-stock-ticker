@@ -9,11 +9,14 @@
 // STOCK_TICKER_CONFIG / STOCK_TICKER_CACHE env vars override the file paths
 // (used by the test suite to run hermetically).
 
-import { spawn } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { statusButtons } from '../vendor/cc-status-buttons/src/index.mjs';
+
+// Overridable for tests; everything platform-dependent keys off this.
+const PLATFORM = process.env.STOCK_TICKER_PLATFORM ?? process.platform;
 
 const CONFIG_PATH = process.env.STOCK_TICKER_CONFIG ?? join(homedir(), '.claude', 'stock-ticker.json');
 const CACHE_PATH = process.env.STOCK_TICKER_CACHE ?? join(tmpdir(), 'claude-stock-ticker-cache.json');
@@ -27,7 +30,6 @@ export const DEFAULTS = {
   showSession: true,
   hyperlink: true,
   nextButton: true,
-  nextPort: 41214,
 };
 
 const RESET = '\x1b[0m';
@@ -121,30 +123,16 @@ export function pickIndex(nowMs, rotateSeconds, offset, count) {
   return (Math.floor(nowMs / 1000 / rotateSeconds) + offset) % count;
 }
 
-// Make sure the ▶ click handler is up; spawn it detached if the ping fails.
-async function ensureListener(port) {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 250);
-  try {
-    await fetch(`http://127.0.0.1:${port}/ping`, { signal: ctrl.signal });
-    return;
-  } catch {
-    // Not running yet.
-  } finally {
-    clearTimeout(timer);
-  }
-  const listener = fileURLToPath(new URL('./next-listener.mjs', import.meta.url));
-  spawn(process.execPath, [listener, String(port)], { detached: true, stdio: 'ignore' }).unref();
-}
-
-export function marketDot(quote, nowMs = Date.now()) {
+export function marketDot(quote, nowMs = Date.now(), bright = Math.floor(nowMs / 500) % 2 === 0) {
   const nowSec = nowMs / 1000;
   const open =
     quote?.regStart != null && quote?.regEnd != null && nowSec >= quote.regStart && nowSec < quote.regEnd;
   if (open) {
-    // SGR blink where the terminal supports it; the bright/dim toggle keyed to
-    // the refresh clock makes it pulse visibly everywhere else.
-    const bright = Math.floor(nowMs / 5000) % 2 === 0;
+    // SGR blink does true sub-second flashing where the terminal animates it.
+    // `bright` drives the software pulse: main() flips it on every render via
+    // the state file, so the dot visibly alternates at the refresh rate even
+    // when the blink attribute is stripped (a wall-clock sample can land on
+    // the same parity every refresh and freeze).
     return `${BLINK}${GREEN}${bright ? '' : DIM}●${RESET}`;
   }
   return `${RED}●${RESET}`;
@@ -189,7 +177,8 @@ export async function main() {
   const session = await readStdin();
 
   const rotateSeconds = Math.max(Number(config.rotateSeconds) || DEFAULTS.rotateSeconds, 1);
-  const offset = Math.max(Number(readJson(STATE_PATH)?.offset) || 0, 0);
+  const state = readJson(STATE_PATH) ?? {};
+  const offset = Math.max(Number(state.offset) || 0, 0);
   const index = pickIndex(Date.now(), rotateSeconds, offset, symbols.length);
   const symbol = symbols[index];
 
@@ -222,11 +211,20 @@ export async function main() {
     hyperlink: config.hyperlink !== false,
   });
 
-  // ▶ next-symbol button: an OSC 8 link to the local click listener.
+  // ▶ next-symbol button, via the cc-status-buttons framework. The framework
+  // picks a click transport for the environment (silent ccbtn:// / vscode://
+  // where available, http bus elsewhere) and presses run scripts/next-symbol.mjs.
+  // On Windows every click route is janky (http steals focus to the browser;
+  // Windows Terminal won't silently exec custom schemes), so we force the
+  // decorative 'none' transport and drop the sentinel — an inactive indicator.
   if (symbols.length > 1 && config.nextButton !== false && config.hyperlink !== false) {
-    const port = Number(config.nextPort) || DEFAULTS.nextPort;
-    await ensureListener(port);
-    left += ` ${linkify(`${DIM}▶${RESET}`, `http://127.0.0.1:${port}/next`, true)}`;
+    const onWin = PLATFORM === 'win32';
+    const nextScript = fileURLToPath(new URL('./next-symbol.mjs', import.meta.url));
+    const bar = await statusButtons(
+      [{ id: 'stock-ticker-next', icon: '▶', command: [process.execPath, nextScript], sentinel: onWin ? null : '>>' }],
+      { transport: onWin ? 'none' : undefined },
+    );
+    left += ` ${bar.render()}`;
   }
 
   let right = '';
@@ -238,7 +236,18 @@ export async function main() {
     right = parts.join(` ${DIM}·${RESET} `);
   }
 
-  const line = `${marketDot(quote)} ${left}`;
+  // Flip the dot frame every render so the open-market pulse animates at the
+  // refresh rate regardless of terminal blink support. Re-read fresh so a
+  // concurrent offset bump from a button press isn't clobbered.
+  const cur = readJson(STATE_PATH) ?? {};
+  const frame = !cur.dotFrame;
+  try {
+    writeFileSync(STATE_PATH, JSON.stringify({ ...cur, dotFrame: frame }));
+  } catch {
+    // Non-fatal; the dot just pulses less reliably.
+  }
+
+  const line = `${marketDot(quote, Date.now(), frame)} ${left}`;
   console.log(right ? `${line}  ${DIM}│${RESET}  ${right}` : line);
 }
 

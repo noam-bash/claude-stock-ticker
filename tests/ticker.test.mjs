@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,7 +9,28 @@ import { fileURLToPath } from 'node:url';
 import { sparkline, linkify, marketDot, formatQuote, pickIndex } from '../scripts/ticker.mjs';
 
 const SCRIPT = fileURLToPath(new URL('../scripts/ticker.mjs', import.meta.url));
-const LISTENER = fileURLToPath(new URL('../scripts/next-listener.mjs', import.meta.url));
+const NEXT = fileURLToPath(new URL('../scripts/next-symbol.mjs', import.meta.url));
+const HOOK = fileURLToPath(new URL('../vendor/cc-status-buttons/adapters/prompt-hook.mjs', import.meta.url));
+
+// Isolated registry/state so button tests never touch the real ~/.claude files.
+function isolatedEnv(dir, extra = {}) {
+  return {
+    ...process.env,
+    CC_STATUS_BUTTONS_REGISTRY: join(dir, 'buttons.json'),
+    CC_STATUS_BUTTONS_STATE: join(dir, 'btn-state.json'),
+    STOCK_TICKER_STATE: join(dir, 'ticker-state.json'),
+    ...extra,
+  };
+}
+
+async function waitFor(predicate, ms = 3000) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (predicate()) return true;
+    await new Promise((r) => setTimeout(r, 40));
+  }
+  return predicate();
+}
 
 const GREEN = '\x1b[32m';
 const RED = '\x1b[31m';
@@ -98,11 +119,20 @@ test('marketDot: red when there is no quote at all', () => {
   assert.ok(marketDot(null, NOW).includes(RED));
 });
 
-test('marketDot: pulses bright/dim across 5-second refresh windows', () => {
+test('marketDot: pulses bright/dim across half-second windows', () => {
   const open = quoteFixture({ regStart: NOW / 1000 - 60, regEnd: NOW / 1000 + 60 });
   const a = marketDot(open, NOW);
-  const b = marketDot(open, NOW + 5000);
+  const b = marketDot(open, NOW + 500);
   assert.notEqual(a, b);
+  assert.equal(a, marketDot(open, NOW + 1000)); // full period returns to the same frame
+});
+
+test('marketDot: explicit frame parameter drives the pulse', () => {
+  const open = quoteFixture({ regStart: NOW / 1000 - 60, regEnd: NOW / 1000 + 60 });
+  assert.notEqual(marketDot(open, NOW, true), marketDot(open, NOW, false));
+  // Closed market ignores the frame: steady red either way.
+  const closed = quoteFixture({ regStart: 0, regEnd: 1 });
+  assert.equal(marketDot(closed, NOW, true), marketDot(closed, NOW, false));
 });
 
 test('formatQuote: missing quote renders a dimmed placeholder', () => {
@@ -181,42 +211,73 @@ test('integration: full script renders ticker and session info from stdin', (t) 
   assert.ok(!garbage.stdout.includes('TestModel'));
 });
 
-// End-to-end: the ▶ click listener bumps the rotation offset in the state file.
-test('integration: next-listener increments offset on /next', async (t) => {
-  const { spawn } = await import('node:child_process');
-  const { readFileSync } = await import('node:fs');
-
-  const dir = mkdtempSync(join(tmpdir(), 'ticker-listener-test-'));
+// The button command bumps the ticker's rotation offset in its state file.
+test('next-symbol increments the rotation offset', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'ticker-next-test-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
   const statePath = join(dir, 'state.json');
-  const port = 41999;
+  const env = { ...process.env, STOCK_TICKER_STATE: statePath };
 
-  const child = spawn(process.execPath, [LISTENER, String(port)], {
-    env: { ...process.env, STOCK_TICKER_STATE: statePath },
-    stdio: 'ignore',
-  });
-  t.after(() => {
-    child.kill();
-    rmSync(dir, { recursive: true, force: true });
-  });
-
-  // Wait for the server to come up.
-  const deadline = Date.now() + 5000;
-  let up = false;
-  while (Date.now() < deadline && !up) {
-    try {
-      await fetch(`http://127.0.0.1:${port}/ping`);
-      up = true;
-    } catch {
-      await new Promise((r) => setTimeout(r, 50));
-    }
-  }
-  assert.ok(up, 'listener did not start within 5s');
-
-  const res1 = await fetch(`http://127.0.0.1:${port}/next`);
-  assert.equal(res1.status, 200);
-  await fetch(`http://127.0.0.1:${port}/next`);
+  spawnSync(process.execPath, [NEXT], { env });
+  assert.equal(JSON.parse(readFileSync(statePath, 'utf8')).offset, 1);
+  spawnSync(process.execPath, [NEXT], { env });
   assert.equal(JSON.parse(readFileSync(statePath, 'utf8')).offset, 2);
+});
 
-  const missing = await fetch(`http://127.0.0.1:${port}/nope`);
-  assert.equal(missing.status, 404);
+function twoSymbolEnv(dir, extra = {}) {
+  const configPath = join(dir, 'config.json');
+  const cachePath = join(dir, 'cache.json');
+  writeFileSync(configPath, JSON.stringify({ symbols: ['AAA', 'BBB'], showSession: false }));
+  writeFileSync(
+    cachePath,
+    JSON.stringify({ AAA: quoteFixture({ ts: Date.now() }), BBB: quoteFixture({ ts: Date.now() }) }),
+  );
+  return isolatedEnv(dir, { STOCK_TICKER_CONFIG: configPath, STOCK_TICKER_CACHE: cachePath, ...extra });
+}
+
+// On non-Windows the ▶ renders as an active click button (transport forced to
+// scheme here so the test never spawns the http bus daemon).
+test('integration: active next button on non-Windows', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'ticker-btn-test-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const env = twoSymbolEnv(dir, { STOCK_TICKER_PLATFORM: 'linux', CC_STATUS_BUTTONS_TRANSPORT: 'scheme' });
+
+  const res = spawnSync(process.execPath, [SCRIPT], { input: '{}', env, encoding: 'utf8' });
+  assert.equal(res.status, 0, res.stderr);
+  assert.ok(res.stdout.includes('▶'));
+  assert.ok(res.stdout.includes('ccbtn://press/stock-ticker-next?t='));
+});
+
+// On Windows the ▶ renders inactive: visible, but no click link.
+test('integration: button is decorative on Windows', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'ticker-winbtn-test-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const env = twoSymbolEnv(dir, { STOCK_TICKER_PLATFORM: 'win32' });
+
+  const res = spawnSync(process.execPath, [SCRIPT], { input: '{}', env, encoding: 'utf8' });
+  assert.equal(res.status, 0, res.stderr);
+  assert.ok(res.stdout.includes('▶'));
+  assert.ok(!res.stdout.includes('127.0.0.1'));
+  assert.ok(!res.stdout.includes('ccbtn://'));
+});
+
+// End-to-end via the vendored prompt hook: render registers the sentinel, then
+// typing it presses the button and bumps the offset; other prompts pass through.
+test('integration: vendored prompt hook presses the sentinel', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'ticker-hook-test-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const env = twoSymbolEnv(dir, { STOCK_TICKER_PLATFORM: 'linux', CC_STATUS_BUTTONS_TRANSPORT: 'scheme' });
+  const statePath = env.STOCK_TICKER_STATE;
+
+  // Render once so the button (sentinel '>>') is registered.
+  spawnSync(process.execPath, [SCRIPT], { input: '{}', env, encoding: 'utf8' });
+
+  const hit = spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ prompt: ' >> ' }), env, encoding: 'utf8' });
+  assert.equal(hit.status, 0, hit.stderr);
+  assert.equal(JSON.parse(hit.stdout).decision, 'block');
+  assert.ok(await waitFor(() => existsSync(statePath) && JSON.parse(readFileSync(statePath, 'utf8')).offset >= 1));
+
+  const normal = spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ prompt: 'hello world' }), env, encoding: 'utf8' });
+  assert.equal(normal.status, 0);
+  assert.equal(normal.stdout.trim(), '');
 });
