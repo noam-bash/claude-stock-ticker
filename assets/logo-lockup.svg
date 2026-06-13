@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="560" height="160" viewBox="0 0 560 160" role="img" aria-label="stock-ticker">
+  <title>stock-ticker</title>
+  <rect width="560" height="160" rx="28" fill="#070B07"/>
+  <g transform="translate(24,24) scale(0.21875)">
+    <rect x="112" y="112" width="288" height="288" rx="50" fill="none" stroke="#3FD24A" stroke-width="16" stroke-linejoin="miter"/>
+    <polyline points="154,296 214,240 258,268 340,180" fill="none" stroke="#3FD24A" stroke-width="13" stroke-linecap="square" stroke-linejoin="miter"/>
+    <polyline points="306,180 340,180 340,214" fill="none" stroke="#3FD24A" stroke-width="13" stroke-linecap="square" stroke-linejoin="miter"/>
+    <polyline points="162,322 192,341 162,360" fill="none" stroke="#3FD24A" stroke-width="13" stroke-linecap="square" stroke-linejoin="miter"/>
+    <line x1="212" y1="360" x2="252" y2="360" stroke="#3FD24A" stroke-width="13" stroke-linecap="butt"/>
+  </g>
+  <text x="196" y="98" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="44" font-weight="700"><tspan fill="#E6EDF3">stock</tspan><tspan fill="#8B949E">-</tspan><tspan fill="#3FD24A">ticker</tspan></text>
+</svg>

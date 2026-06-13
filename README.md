@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/icon-192.png" width="128" alt="stock-ticker logo">
+</p>
+
 # stock-ticker — a live stock ticker for the Claude Code status line
 
 Replaces the bottom status bar with a rotating mini stock ticker — price, daily change, and an intraday sparkline — while keeping your model and context usage in view:
@@ -73,6 +77,10 @@ node --test
 ```
 
 Zero-dependency suite using Node's built-in `node:test` — unit tests for the sparkline, market dot, hyperlink, rotation index, and quote formatting, plus an end-to-end run of the script against a pre-warmed cache (no network) that also asserts no button is rendered. The `STOCK_TICKER_CONFIG` / `STOCK_TICKER_CACHE` / `STOCK_TICKER_STATE` env vars let tests point at temporary files instead of your real config.
+
+## Branding
+
+Logo and icon assets live in [`assets/`](assets/): `logo.svg` (master), `logo-lockup.svg` (icon + wordmark), `favicon.svg`, `favicon.ico`, `apple-touch-icon.png`, and `icon-{16,32,48,64,180,192,512}.png`. The mark is a terminal frame with an uptrend arrow and a `>_` prompt — green on near-black. The logo is for the repo and marketing only; it is not shown in the status line itself.
 
 ## Disclaimer
 
