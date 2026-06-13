@@ -9,6 +9,9 @@ export function detectTransport(reg, env = process.env, platform = undefined) {
   if (env.CC_STATUS_BUTTONS_TRANSPORT) return env.CC_STATUS_BUTTONS_TRANSPORT;
 
   const transports = reg?.transports ?? {};
+  // Inside tmux with the button bar wired up, the click is handled directly by
+  // tmux (no browser, no daemon) — strongly preferred when available.
+  if (env.TMUX && transports.tmux) return 'tmux';
   if (env.TERM_PROGRAM === 'vscode' && transports.vscode) return 'vscode';
   if ((env.WEZTERM_EXECUTABLE || env.KITTY_WINDOW_ID) && transports.scheme) return 'scheme';
   // Windows Terminal only opens http/https/file links, so schemes are out.

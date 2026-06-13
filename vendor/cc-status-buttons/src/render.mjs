@@ -21,7 +21,10 @@ export function renderButtons(reg, defs, { transport = 'http', pressedId = null,
     .map((d) => {
       // Recently pressed buttons render bold for one feedback window.
       const icon = pressedId === d.id ? `${BOLD}${d.icon}${RESET}` : `${DIM}${d.icon}${RESET}`;
-      if (!links || transport === 'none') return icon;
+      // 'tmux' renders the live clickable button in tmux's own status bar (via
+      // `cc-status-buttons tmux-setup`), so in Claude Code's statusline it's a
+      // plain indicator like 'none'.
+      if (!links || transport === 'none' || transport === 'tmux') return icon;
       const url = pressUrl(reg, transport, d.id);
       return `\x1b]8;;${url}\x1b\\${icon}\x1b]8;;\x1b\\`;
     })

@@ -14,6 +14,11 @@ import { readRegistry, ensureRegistry, REGISTRY_PATH } from './registry.mjs';
 import { dispatch } from './dispatch.mjs';
 import { detectTransport } from './detect.mjs';
 
+// Don't crash when piped to a closed reader (e.g. `... | head`).
+process.stdout.on('error', (e) => {
+  if (e.code === 'EPIPE') process.exit(0);
+});
+
 const [cmd, arg] = process.argv.slice(2);
 
 async function busAlive(port) {
@@ -64,7 +69,18 @@ switch (cmd) {
     process.exit(res.status ?? 0);
     break;
   }
+  case 'tmux-setup':
+  case 'tmux-teardown': {
+    const script = fileURLToPath(new URL('../adapters/tmux/setup.mjs', import.meta.url));
+    const res = spawnSync(process.execPath, [script, cmd === 'tmux-setup' ? 'setup' : 'teardown'], {
+      stdio: 'inherit',
+    });
+    process.exit(res.status ?? 0);
+    break;
+  }
   default:
-    console.log('usage: cc-status-buttons <status|press <id>|bus|register-scheme|unregister-scheme>');
+    console.log(
+      'usage: cc-status-buttons <status|press <id>|bus|register-scheme|unregister-scheme|tmux-setup|tmux-teardown>',
+    );
     process.exit(cmd ? 1 : 0);
 }

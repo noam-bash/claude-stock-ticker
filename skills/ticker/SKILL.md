@@ -15,6 +15,8 @@ The leading dot blinks green while the displayed symbol's exchange is open for r
 
 Next-symbol controls are platform dependent: on Linux/macOS the trailing `▶` is clickable and typing `>>` as a prompt advances via the plugin's `UserPromptSubmit` hook; on Windows the `▶` is an inactive indicator and the hook no-ops (use `/ticker next` instead).
 
+For a truly direct click (no browser), run Claude Code inside tmux and run `node "<plugin-root>/vendor/cc-status-buttons/adapters/tmux/setup.mjs" setup` once — the `▶` becomes a clickable button in tmux's status bar that runs the advance command via `run-shell`. Inside `$TMUX` the framework's transport detection returns `tmux`, so the in-Claude-statusline `▶` renders as a plain indicator and the live button lives in the tmux bar.
+
 The status line script lives at `scripts/ticker.mjs` in the plugin root (two directories above this SKILL.md file). Resolve it to an **absolute path with forward slashes** before using it in any settings — the status line command runs through Git Bash on Windows, where backslashes are eaten as escape characters.
 
 ## User config

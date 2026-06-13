@@ -5,9 +5,15 @@
 // which optional transports are registered on this machine.
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+
+// tmux's mouse_status_range argument is capped at 15 bytes, so button ids
+// (which can be longer) get a short stable token derived from the id.
+export function tmuxRangeFor(id) {
+  return 'b' + createHash('sha1').update(id).digest('hex').slice(0, 10);
+}
 
 export const REGISTRY_PATH =
   process.env.CC_STATUS_BUTTONS_REGISTRY ?? join(homedir(), '.claude', 'status-buttons.json');
@@ -63,6 +69,7 @@ export function upsertButtons(defs) {
       icon: d.icon ?? '•',
       command: d.command ?? null,
       sentinel: d.sentinel ?? null,
+      tmuxRange: tmuxRangeFor(d.id),
     };
     if (JSON.stringify(reg.buttons[d.id]) !== JSON.stringify(entry)) {
       reg.buttons[d.id] = entry;

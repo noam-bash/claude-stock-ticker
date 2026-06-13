@@ -11,6 +11,11 @@ The leading dot shows market status for the displayed symbol's exchange: blinkin
 **Next symbol on demand — platform dependent.** The `▶` next-symbol button is powered by [cc-status-buttons](https://github.com/noam-bash/cc-status-buttons) (vendored under `vendor/`), which picks the best click transport for your environment:
 
 - **Linux/macOS**: the trailing `▶` is a clickable button (Ctrl/Cmd+click) that advances the rotation forward, wrapping around — silent `ccbtn://` / `vscode://` clicks where available, otherwise a localhost button bus. Typing `>>` as a prompt also works: a `UserPromptSubmit` hook intercepts it before it reaches the model (no tokens spent) and bumps the rotation.
+- **tmux (any terminal, the no-jank option)**: run Claude Code inside tmux and run the framework's tmux setup once — the `▶` then renders as a *directly clickable* button in tmux's own status bar (a click runs the advance command via `run-shell`, no browser, no daemon):
+  ```
+  node "<plugin-root>/vendor/cc-status-buttons/adapters/tmux/setup.mjs" setup
+  ```
+  (Render the ticker once first so the button is registered. `… setup.mjs teardown` removes it.)
 - **Windows**: every click route is janky (http links steal focus to the browser; Windows Terminal won't silently execute custom schemes), so the button framework's `none` transport is forced — the `▶` renders as an inactive rotation indicator and the prompt sentinel is dropped. The rotation is timer-driven; to force an advance, bump the `offset` field in `%TEMP%\claude-stock-ticker-state.json` or ask Claude via `/ticker next`.
 
 Quotes come from Yahoo Finance's public chart endpoint (no API key). All symbols in your list refresh once a minute (stale quotes are fetched in parallel on each status line tick), and the 60-second cache keeps the frequent refreshes from hammering the API. Symbols rotate every 10 seconds. Works with stocks, indices (`^GSPC`), and crypto (`BTC-USD`).
