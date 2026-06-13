@@ -12,8 +12,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import { statusButtons } from '../vendor/cc-status-buttons/src/index.mjs';
+import { pathToFileURL } from 'node:url';
 
 const CONFIG_PATH = process.env.STOCK_TICKER_CONFIG ?? join(homedir(), '.claude', 'stock-ticker.json');
 const CACHE_PATH = process.env.STOCK_TICKER_CACHE ?? join(tmpdir(), 'claude-stock-ticker-cache.json');
@@ -26,7 +25,6 @@ export const DEFAULTS = {
   sparkPoints: 8,
   showSession: true,
   hyperlink: true,
-  nextButton: true,
 };
 
 const RESET = '\x1b[0m';
@@ -115,7 +113,7 @@ export function linkify(text, url, enabled) {
   return `\x1b]8;;${url}\x1b\\${text}\x1b]8;;\x1b\\`;
 }
 
-// Symbol shown = wall-clock rotation plus the manual ▶ offset, wrapping.
+// Symbol shown = wall-clock rotation plus the manual `/ticker next` offset, wrapping.
 export function pickIndex(nowMs, rotateSeconds, offset, count) {
   return (Math.floor(nowMs / 1000 / rotateSeconds) + offset) % count;
 }
@@ -201,26 +199,12 @@ export async function main() {
   }
   const quote = cache[symbol];
 
-  let left = formatQuote(symbol, quote, {
+  const left = formatQuote(symbol, quote, {
     index,
     total: symbols.length,
     sparkPoints: Math.max(Number(config.sparkPoints) || DEFAULTS.sparkPoints, 2),
     hyperlink: config.hyperlink !== false,
   });
-
-  // ▶ next-symbol button. The symbol always renders as a plain indicator in
-  // Claude Code's status line — the ONLY working click mechanism is tmux. Run
-  // `vendor/cc-status-buttons/adapters/tmux/setup.mjs setup` inside tmux and a
-  // click on the ▶ in tmux's own status bar runs scripts/next-symbol.mjs.
-  // No http bus, no URL scheme, no VS Code URI, no prompt sentinel anywhere.
-  if (symbols.length > 1 && config.nextButton !== false && config.hyperlink !== false) {
-    const nextScript = fileURLToPath(new URL('./next-symbol.mjs', import.meta.url));
-    const bar = await statusButtons(
-      [{ id: 'stock-ticker-next', icon: '▶', command: [process.execPath, nextScript] }],
-      { transport: 'none' },
-    );
-    left += ` ${bar.render()}`;
-  }
 
   let right = '';
   if (config.showSession !== false) {

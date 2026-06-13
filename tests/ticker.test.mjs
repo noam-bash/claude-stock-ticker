@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,27 +9,6 @@ import { fileURLToPath } from 'node:url';
 import { sparkline, linkify, marketDot, formatQuote, pickIndex } from '../scripts/ticker.mjs';
 
 const SCRIPT = fileURLToPath(new URL('../scripts/ticker.mjs', import.meta.url));
-const NEXT = fileURLToPath(new URL('../scripts/next-symbol.mjs', import.meta.url));
-
-// Isolated registry/state so button tests never touch the real ~/.claude files.
-function isolatedEnv(dir, extra = {}) {
-  return {
-    ...process.env,
-    CC_STATUS_BUTTONS_REGISTRY: join(dir, 'buttons.json'),
-    CC_STATUS_BUTTONS_STATE: join(dir, 'btn-state.json'),
-    STOCK_TICKER_STATE: join(dir, 'ticker-state.json'),
-    ...extra,
-  };
-}
-
-async function waitFor(predicate, ms = 3000) {
-  const deadline = Date.now() + ms;
-  while (Date.now() < deadline) {
-    if (predicate()) return true;
-    await new Promise((r) => setTimeout(r, 40));
-  }
-  return predicate();
-}
 
 const GREEN = '\x1b[32m';
 const RED = '\x1b[31m';
@@ -210,20 +189,11 @@ test('integration: full script renders ticker and session info from stdin', (t) 
   assert.ok(!garbage.stdout.includes('TestModel'));
 });
 
-// The button command bumps the ticker's rotation offset in its state file.
-test('next-symbol increments the rotation offset', (t) => {
-  const dir = mkdtempSync(join(tmpdir(), 'ticker-next-test-'));
+// The ticker rotates purely on a timer — there is no next-symbol button of any
+// kind, on any OS/terminal.
+test('integration: no button is rendered (no ▶ or click transport)', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'ticker-nobtn-test-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const statePath = join(dir, 'state.json');
-  const env = { ...process.env, STOCK_TICKER_STATE: statePath };
-
-  spawnSync(process.execPath, [NEXT], { env });
-  assert.equal(JSON.parse(readFileSync(statePath, 'utf8')).offset, 1);
-  spawnSync(process.execPath, [NEXT], { env });
-  assert.equal(JSON.parse(readFileSync(statePath, 'utf8')).offset, 2);
-});
-
-function twoSymbolEnv(dir, extra = {}) {
   const configPath = join(dir, 'config.json');
   const cachePath = join(dir, 'cache.json');
   writeFileSync(configPath, JSON.stringify({ symbols: ['AAA', 'BBB'], showSession: false }));
@@ -231,37 +201,12 @@ function twoSymbolEnv(dir, extra = {}) {
     cachePath,
     JSON.stringify({ AAA: quoteFixture({ ts: Date.now() }), BBB: quoteFixture({ ts: Date.now() }) }),
   );
-  return isolatedEnv(dir, { STOCK_TICKER_CONFIG: configPath, STOCK_TICKER_CACHE: cachePath, ...extra });
-}
-
-// The ▶ always renders as a plain decorative symbol — no click transport is
-// wired in Claude Code's own status line on any OS/terminal. tmux is the only
-// thing that makes it clickable, and that lives in tmux's bar (not asserted
-// here). So: symbol present, but never an http link or a URL scheme.
-test('integration: next symbol is a decorative ▶ with no inline click transport', (t) => {
-  const dir = mkdtempSync(join(tmpdir(), 'ticker-btn-test-'));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  // Even if a transport is "available", the ticker forces decorative rendering.
-  const env = twoSymbolEnv(dir, { CC_STATUS_BUTTONS_TRANSPORT: 'scheme' });
+  const env = { ...process.env, STOCK_TICKER_CONFIG: configPath, STOCK_TICKER_CACHE: cachePath };
 
   const res = spawnSync(process.execPath, [SCRIPT], { input: '{}', env, encoding: 'utf8' });
   assert.equal(res.status, 0, res.stderr);
-  assert.ok(res.stdout.includes('▶'));
+  assert.ok(/AAA|BBB/.test(res.stdout));
+  assert.ok(!res.stdout.includes('▶'));
   assert.ok(!res.stdout.includes('ccbtn://'));
   assert.ok(!res.stdout.includes('127.0.0.1'));
-  assert.ok(!res.stdout.includes('vscode://'));
-});
-
-// Rendering still registers the button (with its tmux range token) so that
-// `cc-status-buttons tmux-setup` can surface it as a clickable tmux button.
-test('integration: render registers stock-ticker-next for tmux', (t) => {
-  const dir = mkdtempSync(join(tmpdir(), 'ticker-reg-test-'));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const env = twoSymbolEnv(dir);
-
-  spawnSync(process.execPath, [SCRIPT], { input: '{}', env, encoding: 'utf8' });
-  const reg = JSON.parse(readFileSync(env.CC_STATUS_BUTTONS_REGISTRY, 'utf8'));
-  assert.ok(reg.buttons['stock-ticker-next']);
-  assert.match(reg.buttons['stock-ticker-next'].tmuxRange, /^b[0-9a-f]+$/);
-  assert.equal(reg.buttons['stock-ticker-next'].sentinel, null); // no prompt mechanism
 });

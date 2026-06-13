@@ -3,20 +3,12 @@
 Replaces the bottom status bar with a rotating mini stock ticker — price, daily change, and an intraday sparkline — while keeping your model and context usage in view:
 
 ```
-● NVDA $204.87 ▲2.22% ▂▃▃▅▄▆▇ 2/4 ▶  │  Fable 5 · 34% ctx
+● NVDA $204.87 ▲2.22% ▂▃▃▅▄▆▇ 2/4  │  Fable 5 · 34% ctx
 ```
 
 The leading dot shows market status for the displayed symbol's exchange: blinking green while the market is open for regular trading, steady red otherwise (pre/post-market, weekends, holidays). The blink is two layers: the ANSI blink attribute gives sub-second flashing in terminals that animate it (Windows Terminal does), and the dot also alternates bright/dim on every status line render as a fallback pulse — set `refreshInterval: 1` for the smoothest effect.
 
-**Next symbol — tmux only.** The trailing `▶` always renders as a plain symbol in Claude Code's status line; there is deliberately **no inline click mechanism** (no localhost bus, no `ccbtn://` scheme, no `vscode://`, no `>>` prompt sentinel) on any OS or terminal. A status line is one-way text — the browser/daemon dances those transports require aren't worth it.
-
-The one place a status-line button can run a command on click *directly* is **tmux**, which owns its own status bar and mouse events. Run Claude Code inside tmux and, once, wire it up via the vendored [cc-status-buttons](https://github.com/noam-bash/cc-status-buttons):
-
-```
-node "<plugin-root>/vendor/cc-status-buttons/adapters/tmux/setup.mjs" setup     # teardown to remove
-```
-
-This puts the `▶` into tmux's `status-right` as a clickable region; a click runs `scripts/next-symbol.mjs` via `run-shell` — no browser, no daemon, no token. (Render the ticker once first so the button is registered; needs tmux 3.3+.) Everywhere else the `▶` is a decorative indicator; rotation is timer-driven, and you can always force an advance by bumping the `offset` field in `%TEMP%`/`$TMPDIR`'s `claude-stock-ticker-state.json` or asking Claude via `/ticker next`.
+Symbols rotate automatically on a timer (`rotateSeconds`). You can nudge the rotation forward by asking Claude (`/ticker next`), which bumps the `offset` field in `claude-stock-ticker-state.json`.
 
 Quotes come from Yahoo Finance's public chart endpoint (no API key). All symbols in your list refresh once a minute (stale quotes are fetched in parallel on each status line tick), and the 60-second cache keeps the frequent refreshes from hammering the API. Symbols rotate every 10 seconds. Works with stocks, indices (`^GSPC`), and crypto (`BTC-USD`).
 
@@ -60,8 +52,7 @@ Or manually — add to `~/.claude/settings.json` (forward slashes matter on Wind
   "cacheTtlSeconds": 60,
   "sparkPoints": 8,
   "showSession": true,
-  "hyperlink": true,
-  "nextButton": true
+  "hyperlink": true
 }
 ```
 
@@ -71,9 +62,9 @@ With the plugin installed, `/ticker` manages all of this conversationally: `/tic
 
 ## How it works
 
-`scripts/ticker.mjs` runs on every status line refresh. It picks the current symbol from the wall clock (`now / rotateSeconds mod symbols.length` — stateless rotation, no daemon), then fetches every symbol whose cached quote is older than `cacheTtlSeconds` in parallel from `query1.finance.yahoo.com/v8/finance/chart/<symbol>?range=1d&interval=15m` (2-second timeout each). Market open/closed for the dot comes from the `currentTradingPeriod.regular` window in the same response, so it respects each exchange's hours, weekends, and holidays. Fetch failures fall back to the cached quote (marked `(cached)` after 15 minutes), or a dimmed `SYM —` if there's nothing cached yet.
+`scripts/ticker.mjs` runs on every status line refresh. It picks the current symbol from the wall clock (`(now / rotateSeconds + offset) mod symbols.length` — stateless rotation, no daemon), then fetches every symbol whose cached quote is older than `cacheTtlSeconds` in parallel from `query1.finance.yahoo.com/v8/finance/chart/<symbol>?range=1d&interval=15m` (2-second timeout each). Market open/closed for the dot comes from the `currentTradingPeriod.regular` window in the same response, so it respects each exchange's hours, weekends, and holidays. Fetch failures fall back to the cached quote (marked `(cached)` after 15 minutes), or a dimmed `SYM —` if there's nothing cached yet.
 
-The `▶` is registered with the vendored [cc-status-buttons](https://github.com/noam-bash/cc-status-buttons) framework using its `none` transport, so it renders as a plain symbol with no inline click handler. Registration still records the button's command (`scripts/next-symbol.mjs`, which bumps a rotation offset the ticker adds to its wall-clock index) and a short tmux range token, so `tmux-setup` can surface it as a clickable button in tmux's status bar. A press advances the symbol on the next status line refresh (≤ `refreshInterval` seconds). The button only renders with 2+ symbols, and `"nextButton": false` removes it entirely.
+The `offset` (advanced by `/ticker next`) and the dot's pulse frame are the only things kept in `claude-stock-ticker-state.json`. There is no next-symbol button — rotation is purely timer-driven.
 
 ## Tests
 
@@ -81,7 +72,7 @@ The `▶` is registered with the vendored [cc-status-buttons](https://github.com
 node --test
 ```
 
-Zero-dependency suite using Node's built-in `node:test` — unit tests for the sparkline, market dot, hyperlink, and quote formatting, plus end-to-end runs of the script against a pre-warmed cache (no network): active button on non-Windows, decorative button on Windows, `next-symbol` offset bump, and the vendored prompt-hook sentinel press. The `STOCK_TICKER_CONFIG` / `STOCK_TICKER_CACHE` / `STOCK_TICKER_STATE` and `CC_STATUS_BUTTONS_*` env vars let tests point at temporary files instead of your real config.
+Zero-dependency suite using Node's built-in `node:test` — unit tests for the sparkline, market dot, hyperlink, rotation index, and quote formatting, plus an end-to-end run of the script against a pre-warmed cache (no network) that also asserts no button is rendered. The `STOCK_TICKER_CONFIG` / `STOCK_TICKER_CACHE` / `STOCK_TICKER_STATE` env vars let tests point at temporary files instead of your real config.
 
 ## Disclaimer
 
