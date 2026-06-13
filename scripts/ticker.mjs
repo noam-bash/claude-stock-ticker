@@ -15,9 +15,6 @@ import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { statusButtons } from '../vendor/cc-status-buttons/src/index.mjs';
 
-// Overridable for tests; everything platform-dependent keys off this.
-const PLATFORM = process.env.STOCK_TICKER_PLATFORM ?? process.platform;
-
 const CONFIG_PATH = process.env.STOCK_TICKER_CONFIG ?? join(homedir(), '.claude', 'stock-ticker.json');
 const CACHE_PATH = process.env.STOCK_TICKER_CACHE ?? join(tmpdir(), 'claude-stock-ticker-cache.json');
 const STATE_PATH = process.env.STOCK_TICKER_STATE ?? join(tmpdir(), 'claude-stock-ticker-state.json');
@@ -211,18 +208,16 @@ export async function main() {
     hyperlink: config.hyperlink !== false,
   });
 
-  // ▶ next-symbol button, via the cc-status-buttons framework. The framework
-  // picks a click transport for the environment (silent ccbtn:// / vscode://
-  // where available, http bus elsewhere) and presses run scripts/next-symbol.mjs.
-  // On Windows every click route is janky (http steals focus to the browser;
-  // Windows Terminal won't silently exec custom schemes), so we force the
-  // decorative 'none' transport and drop the sentinel — an inactive indicator.
+  // ▶ next-symbol button. The symbol always renders as a plain indicator in
+  // Claude Code's status line — the ONLY working click mechanism is tmux. Run
+  // `vendor/cc-status-buttons/adapters/tmux/setup.mjs setup` inside tmux and a
+  // click on the ▶ in tmux's own status bar runs scripts/next-symbol.mjs.
+  // No http bus, no URL scheme, no VS Code URI, no prompt sentinel anywhere.
   if (symbols.length > 1 && config.nextButton !== false && config.hyperlink !== false) {
-    const onWin = PLATFORM === 'win32';
     const nextScript = fileURLToPath(new URL('./next-symbol.mjs', import.meta.url));
     const bar = await statusButtons(
-      [{ id: 'stock-ticker-next', icon: '▶', command: [process.execPath, nextScript], sentinel: onWin ? null : '>>' }],
-      { transport: onWin ? 'none' : undefined },
+      [{ id: 'stock-ticker-next', icon: '▶', command: [process.execPath, nextScript] }],
+      { transport: 'none' },
     );
     left += ` ${bar.render()}`;
   }

@@ -13,9 +13,7 @@ This plugin shows a rotating stock ticker in the Claude Code status line:
 
 The leading dot blinks green while the displayed symbol's exchange is open for regular trading and sits steady red otherwise. Blinking comes from the ANSI blink attribute (sub-second, where the terminal animates it) plus a bright/dim flip on every render as a fallback pulse — `refreshInterval: 1` gives the smoothest effect. All symbols in the list refresh once per minute (controlled by `cacheTtlSeconds`).
 
-Next-symbol controls are platform dependent: on Linux/macOS the trailing `▶` is clickable and typing `>>` as a prompt advances via the plugin's `UserPromptSubmit` hook; on Windows the `▶` is an inactive indicator and the hook no-ops (use `/ticker next` instead).
-
-For a truly direct click (no browser), run Claude Code inside tmux and run `node "<plugin-root>/vendor/cc-status-buttons/adapters/tmux/setup.mjs" setup` once — the `▶` becomes a clickable button in tmux's status bar that runs the advance command via `run-shell`. Inside `$TMUX` the framework's transport detection returns `tmux`, so the in-Claude-statusline `▶` renders as a plain indicator and the live button lives in the tmux bar.
+The trailing `▶` is always a plain decorative symbol in Claude Code's status line — there is no inline click mechanism (no localhost bus, no `ccbtn://`/`vscode://`, no `>>` prompt sentinel) on any OS or terminal. The only way to make it clickable is tmux: run Claude Code inside tmux and run `node "<plugin-root>/vendor/cc-status-buttons/adapters/tmux/setup.mjs" setup` once — the `▶` becomes a clickable button in tmux's status bar that runs the advance command via `run-shell` (teardown to remove). Everywhere else, advance with `/ticker next`.
 
 The status line script lives at `scripts/ticker.mjs` in the plugin root (two directories above this SKILL.md file). Resolve it to an **absolute path with forward slashes** before using it in any settings — the status line command runs through Git Bash on Windows, where backslashes are eaten as escape characters.
 
@@ -41,13 +39,11 @@ All user preferences live in `~/.claude/stock-ticker.json`:
 - `sparkPoints` — width of the intraday sparkline in characters.
 - `showSession` — set `false` to hide the model/context segment.
 - `hyperlink` — the symbol is an OSC 8 link to its Yahoo Finance page (Ctrl/Cmd+click). Set `false` if the user's terminal garbles the escapes; if links show but aren't clickable, suggest launching Claude Code with `FORCE_HYPERLINK=1`.
-- `nextButton` — the trailing `▶`. On Linux/macOS it advances rotation via the vendored cc-status-buttons framework (silent scheme/VS Code transport where available, else a localhost bus); on Windows it renders inactive. Needs 2+ symbols; set `false` to hide it everywhere.
+- `nextButton` — the trailing `▶` decorative symbol (clickable only via tmux `tmux-setup`). Needs 2+ symbols; set `false` to hide it everywhere.
 
 ### Next symbol (`/ticker next`)
 
-Increment the `offset` field (default 0) in the state file — `%TEMP%/claude-stock-ticker-state.json` (or `$TMPDIR`). This is the main manual-advance path on Windows.
-
-On Linux/macOS users can also click `▶` or type `>>` as a prompt: the plugin's `UserPromptSubmit` hook (`hooks/hooks.json` → `vendor/cc-status-buttons/adapters/prompt-hook.mjs`) matches the registered sentinel, presses the button (running `scripts/next-symbol.mjs` to bump the offset), and blocks the prompt so it never reaches the model. On Windows the ticker registers the button without a sentinel, so the hook finds no match and passes the prompt through. The hook loads automatically with the plugin; hooks load at session start, so a new session is needed after install/uninstall.
+Increment the `offset` field (default 0) in the state file — `%TEMP%/claude-stock-ticker-state.json` (or `$TMPDIR`). This is the manual-advance path everywhere outside tmux. (Inside tmux with `tmux-setup` done, clicking the `▶` in tmux's bar does the same thing.)
 
 Every key is optional; the script falls back to the defaults shown above.
 

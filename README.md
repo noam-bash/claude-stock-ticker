@@ -8,15 +8,15 @@ Replaces the bottom status bar with a rotating mini stock ticker — price, dail
 
 The leading dot shows market status for the displayed symbol's exchange: blinking green while the market is open for regular trading, steady red otherwise (pre/post-market, weekends, holidays). The blink is two layers: the ANSI blink attribute gives sub-second flashing in terminals that animate it (Windows Terminal does), and the dot also alternates bright/dim on every status line render as a fallback pulse — set `refreshInterval: 1` for the smoothest effect.
 
-**Next symbol on demand — platform dependent.** The `▶` next-symbol button is powered by [cc-status-buttons](https://github.com/noam-bash/cc-status-buttons) (vendored under `vendor/`), which picks the best click transport for your environment:
+**Next symbol — tmux only.** The trailing `▶` always renders as a plain symbol in Claude Code's status line; there is deliberately **no inline click mechanism** (no localhost bus, no `ccbtn://` scheme, no `vscode://`, no `>>` prompt sentinel) on any OS or terminal. A status line is one-way text — the browser/daemon dances those transports require aren't worth it.
 
-- **Linux/macOS**: the trailing `▶` is a clickable button (Ctrl/Cmd+click) that advances the rotation forward, wrapping around — silent `ccbtn://` / `vscode://` clicks where available, otherwise a localhost button bus. Typing `>>` as a prompt also works: a `UserPromptSubmit` hook intercepts it before it reaches the model (no tokens spent) and bumps the rotation.
-- **tmux (any terminal, the no-jank option)**: run Claude Code inside tmux and run the framework's tmux setup once — the `▶` then renders as a *directly clickable* button in tmux's own status bar (a click runs the advance command via `run-shell`, no browser, no daemon):
-  ```
-  node "<plugin-root>/vendor/cc-status-buttons/adapters/tmux/setup.mjs" setup
-  ```
-  (Render the ticker once first so the button is registered. `… setup.mjs teardown` removes it.)
-- **Windows**: every click route is janky (http links steal focus to the browser; Windows Terminal won't silently execute custom schemes), so the button framework's `none` transport is forced — the `▶` renders as an inactive rotation indicator and the prompt sentinel is dropped. The rotation is timer-driven; to force an advance, bump the `offset` field in `%TEMP%\claude-stock-ticker-state.json` or ask Claude via `/ticker next`.
+The one place a status-line button can run a command on click *directly* is **tmux**, which owns its own status bar and mouse events. Run Claude Code inside tmux and, once, wire it up via the vendored [cc-status-buttons](https://github.com/noam-bash/cc-status-buttons):
+
+```
+node "<plugin-root>/vendor/cc-status-buttons/adapters/tmux/setup.mjs" setup     # teardown to remove
+```
+
+This puts the `▶` into tmux's `status-right` as a clickable region; a click runs `scripts/next-symbol.mjs` via `run-shell` — no browser, no daemon, no token. (Render the ticker once first so the button is registered; needs tmux 3.3+.) Everywhere else the `▶` is a decorative indicator; rotation is timer-driven, and you can always force an advance by bumping the `offset` field in `%TEMP%`/`$TMPDIR`'s `claude-stock-ticker-state.json` or asking Claude via `/ticker next`.
 
 Quotes come from Yahoo Finance's public chart endpoint (no API key). All symbols in your list refresh once a minute (stale quotes are fetched in parallel on each status line tick), and the 60-second cache keeps the frequent refreshes from hammering the API. Symbols rotate every 10 seconds. Works with stocks, indices (`^GSPC`), and crypto (`BTC-USD`).
 
@@ -73,7 +73,7 @@ With the plugin installed, `/ticker` manages all of this conversationally: `/tic
 
 `scripts/ticker.mjs` runs on every status line refresh. It picks the current symbol from the wall clock (`now / rotateSeconds mod symbols.length` — stateless rotation, no daemon), then fetches every symbol whose cached quote is older than `cacheTtlSeconds` in parallel from `query1.finance.yahoo.com/v8/finance/chart/<symbol>?range=1d&interval=15m` (2-second timeout each). Market open/closed for the dot comes from the `currentTradingPeriod.regular` window in the same response, so it respects each exchange's hours, weekends, and holidays. Fetch failures fall back to the cached quote (marked `(cached)` after 15 minutes), or a dimmed `SYM —` if there's nothing cached yet.
 
-The `▶` button is registered with the vendored [cc-status-buttons](https://github.com/noam-bash/cc-status-buttons) framework, whose press handler runs `scripts/next-symbol.mjs` to bump a rotation offset the ticker adds to its wall-clock index. The framework owns the click transport (silent custom-scheme / VS Code URI where available, a token-gated localhost bus elsewhere, or the decorative `none` transport on Windows) and the `>>` prompt sentinel. The symbol advances on the next status line refresh (≤ `refreshInterval` seconds). The button only renders with 2+ symbols, and `"nextButton": false` removes it entirely.
+The `▶` is registered with the vendored [cc-status-buttons](https://github.com/noam-bash/cc-status-buttons) framework using its `none` transport, so it renders as a plain symbol with no inline click handler. Registration still records the button's command (`scripts/next-symbol.mjs`, which bumps a rotation offset the ticker adds to its wall-clock index) and a short tmux range token, so `tmux-setup` can surface it as a clickable button in tmux's status bar. A press advances the symbol on the next status line refresh (≤ `refreshInterval` seconds). The button only renders with 2+ symbols, and `"nextButton": false` removes it entirely.
 
 ## Tests
 

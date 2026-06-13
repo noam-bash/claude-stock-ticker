@@ -10,7 +10,6 @@ import { sparkline, linkify, marketDot, formatQuote, pickIndex } from '../script
 
 const SCRIPT = fileURLToPath(new URL('../scripts/ticker.mjs', import.meta.url));
 const NEXT = fileURLToPath(new URL('../scripts/next-symbol.mjs', import.meta.url));
-const HOOK = fileURLToPath(new URL('../vendor/cc-status-buttons/adapters/prompt-hook.mjs', import.meta.url));
 
 // Isolated registry/state so button tests never touch the real ~/.claude files.
 function isolatedEnv(dir, extra = {}) {
@@ -235,49 +234,34 @@ function twoSymbolEnv(dir, extra = {}) {
   return isolatedEnv(dir, { STOCK_TICKER_CONFIG: configPath, STOCK_TICKER_CACHE: cachePath, ...extra });
 }
 
-// On non-Windows the ▶ renders as an active click button (transport forced to
-// scheme here so the test never spawns the http bus daemon).
-test('integration: active next button on non-Windows', (t) => {
+// The ▶ always renders as a plain decorative symbol — no click transport is
+// wired in Claude Code's own status line on any OS/terminal. tmux is the only
+// thing that makes it clickable, and that lives in tmux's bar (not asserted
+// here). So: symbol present, but never an http link or a URL scheme.
+test('integration: next symbol is a decorative ▶ with no inline click transport', (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'ticker-btn-test-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const env = twoSymbolEnv(dir, { STOCK_TICKER_PLATFORM: 'linux', CC_STATUS_BUTTONS_TRANSPORT: 'scheme' });
+  // Even if a transport is "available", the ticker forces decorative rendering.
+  const env = twoSymbolEnv(dir, { CC_STATUS_BUTTONS_TRANSPORT: 'scheme' });
 
   const res = spawnSync(process.execPath, [SCRIPT], { input: '{}', env, encoding: 'utf8' });
   assert.equal(res.status, 0, res.stderr);
   assert.ok(res.stdout.includes('▶'));
-  assert.ok(res.stdout.includes('ccbtn://press/stock-ticker-next?t='));
-});
-
-// On Windows the ▶ renders inactive: visible, but no click link.
-test('integration: button is decorative on Windows', (t) => {
-  const dir = mkdtempSync(join(tmpdir(), 'ticker-winbtn-test-'));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const env = twoSymbolEnv(dir, { STOCK_TICKER_PLATFORM: 'win32' });
-
-  const res = spawnSync(process.execPath, [SCRIPT], { input: '{}', env, encoding: 'utf8' });
-  assert.equal(res.status, 0, res.stderr);
-  assert.ok(res.stdout.includes('▶'));
-  assert.ok(!res.stdout.includes('127.0.0.1'));
   assert.ok(!res.stdout.includes('ccbtn://'));
+  assert.ok(!res.stdout.includes('127.0.0.1'));
+  assert.ok(!res.stdout.includes('vscode://'));
 });
 
-// End-to-end via the vendored prompt hook: render registers the sentinel, then
-// typing it presses the button and bumps the offset; other prompts pass through.
-test('integration: vendored prompt hook presses the sentinel', async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), 'ticker-hook-test-'));
+// Rendering still registers the button (with its tmux range token) so that
+// `cc-status-buttons tmux-setup` can surface it as a clickable tmux button.
+test('integration: render registers stock-ticker-next for tmux', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'ticker-reg-test-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const env = twoSymbolEnv(dir, { STOCK_TICKER_PLATFORM: 'linux', CC_STATUS_BUTTONS_TRANSPORT: 'scheme' });
-  const statePath = env.STOCK_TICKER_STATE;
+  const env = twoSymbolEnv(dir);
 
-  // Render once so the button (sentinel '>>') is registered.
   spawnSync(process.execPath, [SCRIPT], { input: '{}', env, encoding: 'utf8' });
-
-  const hit = spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ prompt: ' >> ' }), env, encoding: 'utf8' });
-  assert.equal(hit.status, 0, hit.stderr);
-  assert.equal(JSON.parse(hit.stdout).decision, 'block');
-  assert.ok(await waitFor(() => existsSync(statePath) && JSON.parse(readFileSync(statePath, 'utf8')).offset >= 1));
-
-  const normal = spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ prompt: 'hello world' }), env, encoding: 'utf8' });
-  assert.equal(normal.status, 0);
-  assert.equal(normal.stdout.trim(), '');
+  const reg = JSON.parse(readFileSync(env.CC_STATUS_BUTTONS_REGISTRY, 'utf8'));
+  assert.ok(reg.buttons['stock-ticker-next']);
+  assert.match(reg.buttons['stock-ticker-next'].tmuxRange, /^b[0-9a-f]+$/);
+  assert.equal(reg.buttons['stock-ticker-next'].sentinel, null); // no prompt mechanism
 });
