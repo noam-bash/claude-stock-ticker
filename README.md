@@ -12,6 +12,10 @@
 
 Replaces the bottom status bar with a rotating mini stock ticker — price, daily change, and an intraday sparkline — while keeping your model and context usage in view:
 
+<p align="center">
+  <img src="assets/demo.gif" width="660" alt="stock-ticker cycling through NVDA, SPY, AAPL, TSLA, BTC-USD in a terminal status line">
+</p>
+
 ```
 ● NVDA $204.87 ▲2.22% ▂▃▃▅▄▆▇ 2/4  │  Fable 5 · 34% ctx
 ```
