@@ -13,6 +13,7 @@ import { readFileSync, writeFileSync, renameSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { resolveQuote, probe, providerChain } from './providers.mjs';
 
 const CONFIG_PATH = process.env.STOCK_TICKER_CONFIG ?? join(homedir(), '.claude', 'stock-ticker.json');
 const CACHE_PATH = process.env.STOCK_TICKER_CACHE ?? join(tmpdir(), 'claude-stock-ticker-cache.json');
@@ -70,38 +71,6 @@ export async function readStdin() {
     return JSON.parse(raw);
   } catch {
     return {};
-  }
-}
-
-export async function fetchQuote(symbol) {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 2000);
-  try {
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=15m`;
-    const res = await fetch(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (claude-code-stock-ticker)' },
-      signal: ctrl.signal,
-    });
-    if (!res.ok) return null;
-    const json = await res.json();
-    const result = json?.chart?.result?.[0];
-    const meta = result?.meta;
-    if (typeof meta?.regularMarketPrice !== 'number') return null;
-    const closes = (result.indicators?.quote?.[0]?.close ?? []).filter((v) => v != null);
-    const regular = meta.currentTradingPeriod?.regular;
-    return {
-      price: meta.regularMarketPrice,
-      prevClose: meta.chartPreviousClose ?? meta.previousClose ?? null,
-      closes,
-      currency: meta.currency ?? 'USD',
-      regStart: regular?.start ?? null,
-      regEnd: regular?.end ?? null,
-      ts: Date.now(),
-    };
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -181,14 +150,26 @@ export function formatQuote(symbol, quote, position, nowMs = Date.now()) {
   return out;
 }
 
-export async function main() {
-  const config = { ...DEFAULTS, ...(readJson(CONFIG_PATH) ?? {}) };
+// Clean + uppercase configured symbols, falling back to defaults only when the
+// cleaned list is empty (blank/whitespace entries must not survive).
+export function configSymbols(config) {
   const cleaned = (Array.isArray(config.symbols) ? config.symbols : [])
     .map((s) => String(s).trim().toUpperCase())
     .filter(Boolean);
-  // Fall back to defaults only AFTER cleaning, so a config of blank/whitespace
-  // entries doesn't survive the length check and leave an empty list.
-  const symbols = cleaned.length ? cleaned : DEFAULTS.symbols;
+  return cleaned.length ? cleaned : DEFAULTS.symbols;
+}
+
+function providerOptsFrom(config) {
+  return {
+    providers: Array.isArray(config.providers) ? config.providers : undefined,
+    finnhubKey: process.env.FINNHUB_API_KEY ?? config.finnhubKey,
+    timeoutMs: 2000,
+  };
+}
+
+export async function main() {
+  const config = { ...DEFAULTS, ...(readJson(CONFIG_PATH) ?? {}) };
+  const symbols = configSymbols(config);
 
   const session = await readStdin();
 
@@ -198,11 +179,12 @@ export async function main() {
   const index = pickIndex(Date.now(), rotateSeconds, offset, symbols.length);
   const symbol = symbols[index];
 
+  const providerOpts = providerOptsFrom(config);
   const cache = readJson(CACHE_PATH) ?? {};
   const ttlMs = Math.max(Number(config.cacheTtlSeconds) || DEFAULTS.cacheTtlSeconds, 5) * 1000;
   const stale = symbols.filter((s) => !cache[s] || Date.now() - cache[s].ts >= ttlMs);
   if (stale.length) {
-    const fetched = await Promise.all(stale.map(fetchQuote));
+    const fetched = await Promise.all(stale.map((s) => resolveQuote(s, providerOpts)));
     let updated = false;
     stale.forEach((s, i) => {
       if (fetched[i]) {
@@ -244,6 +226,28 @@ export async function main() {
   console.log(right ? `${line}  ${DIM}│${RESET}  ${right}` : line);
 }
 
+// `node ticker.mjs --doctor` — diagnostics for `/ticker doctor`.
+export async function doctor() {
+  const config = { ...DEFAULTS, ...(readJson(CONFIG_PATH) ?? {}) };
+  const symbols = configSymbols(config);
+  const opts = providerOptsFrom(config);
+  const out = [];
+  out.push('stock-ticker doctor');
+  out.push(`config:   ${CONFIG_PATH}`);
+  out.push(`symbols:  ${symbols.join(', ')}`);
+  out.push(`chain:    ${providerChain(symbols[0], opts).join(' → ')}`);
+  out.push(`finnhub:  ${opts.finnhubKey ? 'key set' : 'no key (optional)'}`);
+  out.push('providers:');
+  for (const p of await probe(opts)) out.push(`  ${p.ok ? 'ok  ' : 'FAIL'} ${p.name} (${p.ms}ms)`);
+  const q = await resolveQuote(symbols[0], opts);
+  out.push(`sample:   ${symbols[0]} → ${q ? `$${q.price} via ${q.source}` : 'no data (all providers failed)'}`);
+  out.push(
+    `links:    ${process.env.FORCE_HYPERLINK ? 'FORCE_HYPERLINK set' : 'auto-detect (set FORCE_HYPERLINK=1 if symbol links are not clickable)'}`,
+  );
+  console.log(out.join('\n'));
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await main();
+  if (process.argv.includes('--doctor')) await doctor();
+  else await main();
 }

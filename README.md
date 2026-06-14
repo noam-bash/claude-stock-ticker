@@ -68,11 +68,21 @@ Or manually — add to `~/.claude/settings.json` (forward slashes matter on Wind
 
 The symbol name is an [OSC 8 hyperlink](https://code.claude.com/docs/en/statusline) to its Yahoo Finance quote page — Ctrl+click (Cmd+click on macOS) opens it in your browser. Requires a terminal with hyperlink support; if your terminal supports them but they aren't clickable, launch Claude Code with `FORCE_HYPERLINK=1`. Set `"hyperlink": false` if the link escapes garble your display.
 
-With the plugin installed, `/ticker` manages all of this conversationally: `/ticker set NVDA, BTC-USD`, `/ticker speed 5`, `/ticker status`, `/ticker uninstall`.
+With the plugin installed, `/ticker` manages all of this conversationally: `/ticker set NVDA, BTC-USD`, `/ticker speed 5`, `/ticker status`, `/ticker doctor`, `/ticker uninstall`.
+
+## Data providers
+
+Quotes resolve through a fallback chain so one source being down doesn't blank the ticker:
+
+- Yahoo Finance (default, no key) — tried on two hosts (`query1`/`query2`).
+- CoinGecko (no key) — automatic fallback for known crypto symbols (`BTC-USD`, `ETH-USD`, …).
+- Finnhub (optional) — a general fallback when you set an API key via `FINNHUB_API_KEY` (env) or `"finnhubKey"` in the config.
+
+Override the order per your taste with `"providers": ["yahoo", "finnhub", "coingecko"]`. Run `/ticker doctor` (or `node scripts/ticker.mjs --doctor`) to see your config, which providers respond and how fast, and a live sample quote.
 
 ## How it works
 
-`scripts/ticker.mjs` runs on every status line refresh. It picks the current symbol from the wall clock (`(now / rotateSeconds + offset) mod symbols.length` — stateless rotation, no daemon), then fetches every symbol whose cached quote is older than `cacheTtlSeconds` in parallel from `query1.finance.yahoo.com/v8/finance/chart/<symbol>?range=1d&interval=15m` (2-second timeout each). Market open/closed for the dot comes from the `currentTradingPeriod.regular` window in the same response, so it respects each exchange's hours, weekends, and holidays. Fetch failures fall back to the cached quote (marked `(cached)` after 15 minutes), or a dimmed `SYM —` if there's nothing cached yet.
+`scripts/ticker.mjs` runs on every status line refresh. It picks the current symbol from the wall clock (`(now / rotateSeconds + offset) mod symbols.length` — stateless rotation, no daemon), then resolves every symbol whose cached quote is older than `cacheTtlSeconds` in parallel through the provider chain (`scripts/providers.mjs`, 2-second timeout per request). Market open/closed for the dot comes from the exchange's regular-session window in the response, so it respects each exchange's hours, weekends, and holidays. Failures fall back to the cached quote (marked `(cached)` after 15 minutes), or a dimmed `SYM —` if there's nothing cached yet.
 
 The `offset` (advanced by `/ticker next`) and the dot's pulse frame are the only things kept in `claude-stock-ticker-state.json`. There is no next-symbol button — rotation is purely timer-driven.
 

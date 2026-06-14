@@ -38,6 +38,12 @@ All user preferences live in `~/.claude/stock-ticker.json`:
 - `sparkPoints` — width of the intraday sparkline in characters.
 - `showSession` — set `false` to hide the model/context segment.
 - `hyperlink` — the symbol is an OSC 8 link to its Yahoo Finance page (Ctrl/Cmd+click). Set `false` if the user's terminal garbles the escapes; if links show but aren't clickable, suggest launching Claude Code with `FORCE_HYPERLINK=1`.
+- `providers` — override the fallback chain order, e.g. `["yahoo","finnhub","coingecko"]`. Default: Yahoo (two hosts), then CoinGecko for known crypto symbols, then Finnhub if a key is set.
+- `finnhubKey` — optional Finnhub API key (or set `FINNHUB_API_KEY` in the environment) to enable the Finnhub fallback.
+
+### Doctor (`/ticker doctor`)
+
+Run `node "<plugin-root>/scripts/ticker.mjs" --doctor` and show the output: it reports the config path, symbols, the resolved provider chain, which providers respond (with latency), a live sample quote, and a hyperlink-support hint. Use it to diagnose blank quotes or missing data.
 
 ### Next symbol (`/ticker next`)
 

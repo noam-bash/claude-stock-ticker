@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { sparkline, linkify, marketDot, formatQuote, pickIndex, fetchQuote, writeJsonAtomic, readJson } from '../scripts/ticker.mjs';
+import { sparkline, linkify, marketDot, formatQuote, pickIndex, writeJsonAtomic, readJson } from '../scripts/ticker.mjs';
+import { yahoo, coingecko, finnhub, isCrypto, providerChain, resolveQuote } from '../scripts/providers.mjs';
 
 const SCRIPT = fileURLToPath(new URL('../scripts/ticker.mjs', import.meta.url));
 
@@ -226,51 +227,104 @@ test('integration: whitespace-only symbols fall back to defaults, never "undefin
   assert.ok(!res.stdout.includes('quote/undefined'));
 });
 
-// Data layer: fetchQuote parses Yahoo's shape and fails soft, with no network.
-test('fetchQuote: parses a Yahoo chart response (mocked fetch)', async () => {
-  const realFetch = globalThis.fetch;
-  globalThis.fetch = async () => ({
-    ok: true,
-    json: async () => ({
-      chart: {
-        result: [
-          {
-            meta: {
-              regularMarketPrice: 123.45,
-              chartPreviousClose: 120,
-              currency: 'USD',
-              currentTradingPeriod: { regular: { start: 1000, end: 2000 } },
-            },
-            indicators: { quote: [{ close: [100, null, 110] }] },
-          },
-        ],
-      },
-    }),
+// --- Providers (all mocked, no network) ---
+function withFetch(fn, run) {
+  const real = globalThis.fetch;
+  globalThis.fetch = fn;
+  return Promise.resolve(run()).finally(() => {
+    globalThis.fetch = real;
   });
-  try {
-    const q = await fetchQuote('TEST');
+}
+
+const YAHOO_OK = {
+  ok: true,
+  json: async () => ({
+    chart: {
+      result: [
+        {
+          meta: {
+            regularMarketPrice: 123.45,
+            chartPreviousClose: 120,
+            currency: 'USD',
+            currentTradingPeriod: { regular: { start: 1000, end: 2000 } },
+            regularMarketDayHigh: 125,
+            regularMarketDayLow: 119,
+            regularMarketVolume: 9000,
+            fiftyTwoWeekHigh: 200,
+            fiftyTwoWeekLow: 80,
+          },
+          indicators: { quote: [{ close: [100, null, 110] }] },
+        },
+      ],
+    },
+  }),
+};
+
+test('yahoo: parses a chart response with enriched fields', () =>
+  withFetch(async () => YAHOO_OK, async () => {
+    const q = await yahoo('TEST');
     assert.equal(q.price, 123.45);
     assert.equal(q.prevClose, 120);
-    assert.deepEqual(q.closes, [100, 110]); // nulls filtered
+    assert.deepEqual(q.closes, [100, 110]);
     assert.equal(q.currency, 'USD');
     assert.equal(q.regStart, 1000);
-    assert.equal(q.regEnd, 2000);
-    assert.equal(typeof q.ts, 'number');
-  } finally {
-    globalThis.fetch = realFetch;
-  }
+    assert.equal(q.dayHigh, 125);
+    assert.equal(q.volume, 9000);
+    assert.equal(q.week52High, 200);
+    assert.equal(q.source, 'yahoo');
+  }));
+
+test('yahoo: null on non-ok or missing price', () =>
+  withFetch(async () => ({ ok: false, json: async () => ({}) }), async () => {
+    assert.equal(await yahoo('TEST'), null);
+  }));
+
+test('coingecko: maps crypto symbol and derives prevClose from 24h change', () =>
+  withFetch(async () => ({ ok: true, json: async () => ({ bitcoin: { usd: 110, usd_24h_change: 10 } }) }), async () => {
+    const q = await coingecko('BTC-USD');
+    assert.equal(q.price, 110);
+    assert.ok(Math.abs(q.prevClose - 100) < 1e-9); // 110 / 1.10
+    assert.equal(q.source, 'coingecko');
+    assert.ok(q.regStart < Date.now() / 1000 && q.regEnd > Date.now() / 1000); // 24/7 open
+    assert.equal(await coingecko('AAPL'), null); // not a known coin
+  }));
+
+test('finnhub: needs a key, parses c/pc', async () => {
+  assert.equal(await finnhub('AAPL', {}), null); // no key
+  await withFetch(async () => ({ ok: true, json: async () => ({ c: 50, pc: 48, h: 51, l: 47 }) }), async () => {
+    const q = await finnhub('AAPL', { finnhubKey: 'k' });
+    assert.equal(q.price, 50);
+    assert.equal(q.prevClose, 48);
+    assert.equal(q.source, 'finnhub');
+  });
 });
 
-test('fetchQuote: returns null on a non-ok response or missing price', async () => {
-  const realFetch = globalThis.fetch;
-  try {
-    globalThis.fetch = async () => ({ ok: false, json: async () => ({}) });
-    assert.equal(await fetchQuote('TEST'), null);
-    globalThis.fetch = async () => ({ ok: true, json: async () => ({ chart: { result: [{ meta: {} }] } }) });
-    assert.equal(await fetchQuote('TEST'), null);
-  } finally {
-    globalThis.fetch = realFetch;
-  }
+test('isCrypto + providerChain: defaults and overrides', () => {
+  assert.equal(isCrypto('BTC-USD'), true);
+  assert.equal(isCrypto('AAPL'), false);
+  assert.equal(isCrypto('FOO-USD'), false); // unknown coin
+  assert.deepEqual(providerChain('AAPL', {}), ['yahoo']);
+  assert.deepEqual(providerChain('BTC-USD', {}), ['yahoo', 'coingecko']);
+  assert.deepEqual(providerChain('AAPL', { finnhubKey: 'k' }), ['yahoo', 'finnhub']);
+  assert.deepEqual(providerChain('AAPL', { providers: ['finnhub', 'yahoo', 'bogus'] }), ['finnhub', 'yahoo']);
+});
+
+test('resolveQuote: falls through to the next provider when the first is down', () => {
+  let calls = 0;
+  return withFetch(
+    async (url) => {
+      calls++;
+      // Yahoo (both hosts) fails; coingecko succeeds.
+      if (String(url).includes('finance.yahoo.com')) return { ok: false, json: async () => ({}) };
+      return { ok: true, json: async () => ({ bitcoin: { usd: 200, usd_24h_change: 0 } }) };
+    },
+    async () => {
+      const q = await resolveQuote('BTC-USD', {});
+      assert.equal(q.source, 'coingecko');
+      assert.equal(q.price, 200);
+      assert.ok(calls >= 2); // tried yahoo host(s) then coingecko
+    },
+  );
 });
 
 test('writeJsonAtomic: writes via temp+rename and leaves no temp behind', (t) => {
