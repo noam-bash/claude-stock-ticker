@@ -2,6 +2,12 @@
   <img src="assets/icon-192.png" width="128" alt="stock-ticker logo">
 </p>
 
+<p align="center">
+  <a href="https://github.com/noam-bash/claude-stock-ticker/actions/workflows/ci.yml"><img src="https://github.com/noam-bash/claude-stock-ticker/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-3fd24a" alt="MIT license"></a>
+  <a href="https://noam-bash.github.io/claude-stock-ticker/"><img src="https://img.shields.io/badge/site-live-3fd24a" alt="Live site"></a>
+</p>
+
 # stock-ticker — a live stock ticker for the Claude Code status line
 
 Replaces the bottom status bar with a rotating mini stock ticker — price, daily change, and an intraday sparkline — while keeping your model and context usage in view:

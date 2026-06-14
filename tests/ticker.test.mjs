@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { sparkline, linkify, marketDot, formatQuote, pickIndex } from '../scripts/ticker.mjs';
+import { sparkline, linkify, marketDot, formatQuote, pickIndex, fetchQuote, writeJsonAtomic, readJson } from '../scripts/ticker.mjs';
 
 const SCRIPT = fileURLToPath(new URL('../scripts/ticker.mjs', import.meta.url));
 
@@ -224,4 +224,61 @@ test('integration: whitespace-only symbols fall back to defaults, never "undefin
   assert.equal(res.status, 0, res.stderr);
   assert.ok(!res.stdout.toLowerCase().includes('undefined'));
   assert.ok(!res.stdout.includes('quote/undefined'));
+});
+
+// Data layer: fetchQuote parses Yahoo's shape and fails soft, with no network.
+test('fetchQuote: parses a Yahoo chart response (mocked fetch)', async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      chart: {
+        result: [
+          {
+            meta: {
+              regularMarketPrice: 123.45,
+              chartPreviousClose: 120,
+              currency: 'USD',
+              currentTradingPeriod: { regular: { start: 1000, end: 2000 } },
+            },
+            indicators: { quote: [{ close: [100, null, 110] }] },
+          },
+        ],
+      },
+    }),
+  });
+  try {
+    const q = await fetchQuote('TEST');
+    assert.equal(q.price, 123.45);
+    assert.equal(q.prevClose, 120);
+    assert.deepEqual(q.closes, [100, 110]); // nulls filtered
+    assert.equal(q.currency, 'USD');
+    assert.equal(q.regStart, 1000);
+    assert.equal(q.regEnd, 2000);
+    assert.equal(typeof q.ts, 'number');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('fetchQuote: returns null on a non-ok response or missing price', async () => {
+  const realFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => ({ ok: false, json: async () => ({}) });
+    assert.equal(await fetchQuote('TEST'), null);
+    globalThis.fetch = async () => ({ ok: true, json: async () => ({ chart: { result: [{ meta: {} }] } }) });
+    assert.equal(await fetchQuote('TEST'), null);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('writeJsonAtomic: writes via temp+rename and leaves no temp behind', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'ticker-atomic-test-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const p = join(dir, 'state.json');
+  assert.equal(writeJsonAtomic(p, { offset: 3 }), true);
+  assert.deepEqual(readJson(p), { offset: 3 });
+  const leftover = readdirSync(dir).filter((f) => f.endsWith('.tmp'));
+  assert.equal(leftover.length, 0);
 });

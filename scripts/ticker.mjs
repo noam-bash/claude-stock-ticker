@@ -9,7 +9,7 @@
 // STOCK_TICKER_CONFIG / STOCK_TICKER_CACHE env vars override the file paths
 // (used by the test suite to run hermetically).
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -41,6 +41,24 @@ export function readJson(path) {
     return JSON.parse(readFileSync(path, 'utf8'));
   } catch {
     return null;
+  }
+}
+
+// Write JSON atomically (temp file + rename) so a concurrent reader never sees
+// a half-written file, and two writers can't interleave a corrupt result.
+export function writeJsonAtomic(path, obj) {
+  const tmp = `${path}.${process.pid}.tmp`;
+  try {
+    writeFileSync(tmp, JSON.stringify(obj));
+    renameSync(tmp, path);
+    return true;
+  } catch {
+    try {
+      rmSync(tmp, { force: true });
+    } catch {
+      // ignore cleanup failure
+    }
+    return false;
   }
 }
 
@@ -193,11 +211,8 @@ export async function main() {
       }
     });
     if (updated) {
-      try {
-        writeFileSync(CACHE_PATH, JSON.stringify(cache));
-      } catch {
-        // Cache write failures are non-fatal; we just refetch next time.
-      }
+      // Atomic; non-fatal on failure — we just refetch next time.
+      writeJsonAtomic(CACHE_PATH, cache);
     }
   }
   const quote = cache[symbol];
@@ -220,14 +235,10 @@ export async function main() {
 
   // Flip the dot frame every render so the open-market pulse animates at the
   // refresh rate regardless of terminal blink support. Re-read fresh so a
-  // concurrent offset bump from a button press isn't clobbered.
+  // concurrent offset change (/ticker next) isn't clobbered; write atomically.
   const cur = readJson(STATE_PATH) ?? {};
   const frame = !cur.dotFrame;
-  try {
-    writeFileSync(STATE_PATH, JSON.stringify({ ...cur, dotFrame: frame }));
-  } catch {
-    // Non-fatal; the dot just pulses less reliably.
-  }
+  writeJsonAtomic(STATE_PATH, { ...cur, dotFrame: frame });
 
   const line = `${marketDot(quote, Date.now(), frame)} ${left}`;
   console.log(right ? `${line}  ${DIM}│${RESET}  ${right}` : line);
