@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { sparkline, linkify, marketDot, formatQuote, pickIndex, writeJsonAtomic, readJson } from '../scripts/ticker.mjs';
+import { sparkline, linkify, marketDot, formatQuote, pickIndex, writeJsonAtomic, readJson, pctChange, compactItem, renderCompact, renderPortfolio } from '../scripts/ticker.mjs';
 import { yahoo, coingecko, finnhub, isCrypto, providerChain, resolveQuote } from '../scripts/providers.mjs';
 
 const SCRIPT = fileURLToPath(new URL('../scripts/ticker.mjs', import.meta.url));
@@ -325,6 +325,55 @@ test('resolveQuote: falls through to the next provider when the first is down', 
       assert.ok(calls >= 2); // tried yahoo host(s) then coingecko
     },
   );
+});
+
+// --- v0.8: layouts, opt-in fields, alerts ---
+test('formatQuote: opt-in fields append only when enabled and present', () => {
+  const q = quoteFixture({ dayLow: 90, dayHigh: 130, volume: 9_000_000, week52Low: 50, week52High: 200 });
+  const base = formatQuote('AAA', q, { hyperlink: false });
+  assert.ok(!base.includes('V9.0M') && !base.includes('52w'));
+  const full = formatQuote('AAA', q, {
+    hyperlink: false,
+    fields: { volume: true, dayRange: true, week52: true },
+  });
+  assert.ok(full.includes('V9.0M'));
+  assert.ok(full.includes('90.00–130.00'));
+  assert.ok(full.includes('52w 50.00–200.00'));
+});
+
+test('formatQuote: alertPercent bolds the change and adds a marker on big moves', () => {
+  const big = formatQuote('AAA', quoteFixture({ price: 110, prevClose: 100 }), { hyperlink: false, alertPercent: 5 });
+  assert.ok(big.includes('!'));
+  assert.ok(big.includes('\x1b[1m')); // bold somewhere in the change
+  const small = formatQuote('AAA', quoteFixture({ price: 101, prevClose: 100 }), { hyperlink: false, alertPercent: 5 });
+  assert.ok(!small.includes('!'));
+});
+
+test('pctChange: derives daily percent, null without prevClose', () => {
+  assert.ok(Math.abs(pctChange({ price: 110, prevClose: 100 }) - 10) < 1e-9);
+  assert.equal(pctChange({ price: 110, prevClose: 0 }), null);
+});
+
+test('renderCompact: one tile per symbol, dim placeholder when missing', () => {
+  const cache = { AAA: quoteFixture({ price: 110, prevClose: 100 }), BBB: quoteFixture({ price: 90, prevClose: 100 }) };
+  const out = renderCompact(['AAA', 'BBB', 'CCC'], cache);
+  assert.ok(out.includes('AAA') && out.includes('▲10.00%'));
+  assert.ok(out.includes('BBB') && out.includes('▼10.00%'));
+  assert.ok(out.includes('CCC —')); // missing quote
+  assert.ok(!out.includes('\x1b]8;;')); // compact has no links
+});
+
+test('renderPortfolio: totals value and day P/L from holdings', () => {
+  const cache = {
+    AAA: quoteFixture({ price: 110, prevClose: 100 }), // +10/share
+    BBB: quoteFixture({ price: 50, prevClose: 52 }), //   -2/share
+  };
+  // 10*110 + 4*50 = 1100 + 200 = 1300 value; dayPL = 10*10 + 4*(-2) = 100 - 8 = 92
+  const out = renderPortfolio({ aaa: 10, BBB: { qty: 4 } }, cache);
+  assert.ok(out.includes('Port'));
+  assert.ok(out.includes('$1,300'));
+  assert.ok(out.includes('▲$92'));
+  assert.equal(renderPortfolio({ ZZZ: 5 }, cache), `\x1b[2mPort —\x1b[0m`); // none held
 });
 
 test('writeJsonAtomic: writes via temp+rename and leaves no temp behind', (t) => {

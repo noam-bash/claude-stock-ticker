@@ -70,6 +70,31 @@ The symbol name is an [OSC 8 hyperlink](https://code.claude.com/docs/en/statusli
 
 With the plugin installed, `/ticker` manages all of this conversationally: `/ticker set NVDA, BTC-USD`, `/ticker speed 5`, `/ticker status`, `/ticker doctor`, `/ticker uninstall`.
 
+## Layouts & extras
+
+Set `"layout"` to choose how the segment renders (all keys optional, extras default off):
+
+- `"rotate"` (default) — one symbol at a time: `● NVDA $204.87 ▲2.22% ▂▃▅▆▇`
+- `"compact"` — the whole list at once: `● SPY ▲0.54%  NVDA ▲0.16%  AAPL ▼1.52%`
+- `"portfolio"` — totals from `"holdings"`: `● Port $3,251 ▲$13.57 0.42%`
+
+```json
+{
+  "layout": "portfolio",
+  "holdings": { "AAPL": 10, "NVDA": { "qty": 5 } },
+  "showVolume": true,
+  "showDayRange": true,
+  "show52w": true,
+  "alertPercent": 5
+}
+```
+
+- `holdings` — `{ "SYMBOL": qty }` (or `{ "qty": n }`); portfolio shows total value and day P/L.
+- `showVolume` / `showDayRange` / `show52w` — opt-in fields appended in rotate mode (volume, day low–high, 52-week range).
+- `alertPercent` — when a move's daily % meets this threshold, the change is bolded with a `!`.
+
+It's display-only — there are no buttons or click actions on the status line.
+
 ## Data providers
 
 Quotes resolve through a fallback chain so one source being down doesn't blank the ticker:

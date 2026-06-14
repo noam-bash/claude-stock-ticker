@@ -120,6 +120,29 @@ export function marketDot(quote, nowMs = Date.now(), bright = Math.floor(nowMs /
   return `${RED}●${RESET}`;
 }
 
+export function pctChange(quote) {
+  return quote?.prevClose ? ((quote.price - quote.prevClose) / quote.prevClose) * 100 : null;
+}
+
+function fmtPrice(n) {
+  return n >= 1 ? n.toFixed(2) : n.toFixed(4);
+}
+function fmtMoney(n) {
+  const a = Math.abs(n);
+  return a >= 1000 ? Math.round(n).toLocaleString('en-US') : n.toFixed(2);
+}
+function fmtVol(n) {
+  if (n >= 1e9) return `${(n / 1e9).toFixed(1)}B`;
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
+  if (n >= 1e3) return `${(n / 1e3).toFixed(1)}K`;
+  return String(n);
+}
+function coloredPct(chg, bold = false) {
+  const color = chg >= 0 ? GREEN : RED;
+  const arrow = chg >= 0 ? '▲' : '▼';
+  return `${color}${bold ? BOLD : ''}${arrow}${Math.abs(chg).toFixed(2)}%${RESET}`;
+}
+
 export function formatQuote(symbol, quote, position, nowMs = Date.now()) {
   const name = linkify(
     `${BOLD}${symbol}${RESET}`,
@@ -129,25 +152,67 @@ export function formatQuote(symbol, quote, position, nowMs = Date.now()) {
   if (!quote) return `${DIM}${name} —${RESET}`;
 
   const cur = CURRENCY_SYMBOLS[quote.currency] ?? `${quote.currency} `;
-  const price = quote.price >= 1 ? quote.price.toFixed(2) : quote.price.toFixed(4);
+  const price = fmtPrice(quote.price);
 
   let pct = '';
-  if (quote.prevClose) {
-    const chg = ((quote.price - quote.prevClose) / quote.prevClose) * 100;
-    const color = chg >= 0 ? GREEN : RED;
-    const arrow = chg >= 0 ? '▲' : '▼';
-    pct = ` ${color}${arrow}${Math.abs(chg).toFixed(2)}%${RESET}`;
+  const chg = pctChange(quote);
+  if (chg != null) {
+    const alert = position.alertPercent ? Math.abs(chg) >= position.alertPercent : false;
+    pct = ` ${coloredPct(chg, alert)}${alert ? ` ${BOLD}!${RESET}` : ''}`;
   }
 
   const spark = sparkline(quote.closes ?? [], position.sparkPoints);
   // Older than 15 min means the fetch has been failing and we're showing leftovers.
   const stale = nowMs - quote.ts > 15 * 60 * 1000;
+  const f = position.fields || {};
 
   let out = `${name} ${cur}${price}${pct}`;
   if (spark) out += ` ${DIM}${spark}${RESET}`;
+  if (f.volume && quote.volume) out += ` ${DIM}V${fmtVol(quote.volume)}${RESET}`;
+  if (f.dayRange && quote.dayLow != null && quote.dayHigh != null)
+    out += ` ${DIM}${fmtPrice(quote.dayLow)}–${fmtPrice(quote.dayHigh)}${RESET}`;
+  if (f.week52 && quote.week52Low != null && quote.week52High != null)
+    out += ` ${DIM}52w ${fmtPrice(quote.week52Low)}–${fmtPrice(quote.week52High)}${RESET}`;
   if (stale) out += ` ${DIM}(cached)${RESET}`;
   if (position.total > 1) out += ` ${DIM}${position.index + 1}/${position.total}${RESET}`;
   return out;
+}
+
+// Compact multi-symbol: "NVDA ▲2.2%  SPY ▲0.5%  AAPL ▼1.7%" — no sparklines.
+export function compactItem(symbol, quote, { alertPercent } = {}) {
+  if (!quote) return `${DIM}${symbol} —${RESET}`;
+  const chg = pctChange(quote);
+  if (chg == null) return `${BOLD}${symbol}${RESET} ${DIM}·${RESET}`;
+  const alert = alertPercent ? Math.abs(chg) >= alertPercent : false;
+  return `${BOLD}${symbol}${RESET} ${coloredPct(chg, alert)}${alert ? '!' : ''}`;
+}
+export function renderCompact(symbols, cache, opts = {}) {
+  return symbols.map((s) => compactItem(s, cache[s], opts)).join('  ');
+}
+
+// Portfolio: total value + day P/L from holdings { SYMBOL: qty } (or { qty }).
+export function renderPortfolio(holdings, cache, opts = {}) {
+  let value = 0;
+  let dayPL = 0;
+  let prevValue = 0;
+  let have = false;
+  for (const [sym, raw] of Object.entries(holdings)) {
+    const q = cache[sym.toUpperCase()];
+    const qty = typeof raw === 'object' && raw ? Number(raw.qty) : Number(raw);
+    if (!q || !qty) continue;
+    have = true;
+    value += qty * q.price;
+    if (q.prevClose) {
+      dayPL += qty * (q.price - q.prevClose);
+      prevValue += qty * q.prevClose;
+    }
+  }
+  if (!have) return `${DIM}Port —${RESET}`;
+  const pct = prevValue > 0 ? (dayPL / prevValue) * 100 : 0;
+  const color = dayPL >= 0 ? GREEN : RED;
+  const arrow = dayPL >= 0 ? '▲' : '▼';
+  const alert = opts.alertPercent ? Math.abs(pct) >= opts.alertPercent : false;
+  return `${BOLD}Port${RESET} $${fmtMoney(value)} ${color}${alert ? BOLD : ''}${arrow}$${fmtMoney(Math.abs(dayPL))} ${Math.abs(pct).toFixed(2)}%${RESET}`;
 }
 
 // Clean + uppercase configured symbols, falling back to defaults only when the
@@ -173,6 +238,12 @@ export async function main() {
 
   const session = await readStdin();
 
+  const layout = ['rotate', 'compact', 'portfolio'].includes(config.layout) ? config.layout : 'rotate';
+  const holdings =
+    layout === 'portfolio' && config.holdings && typeof config.holdings === 'object' ? config.holdings : null;
+  const effLayout = layout === 'portfolio' && !holdings ? 'rotate' : layout;
+  const fetchSet = holdings ? [...new Set(Object.keys(holdings).map((s) => s.toUpperCase()))] : symbols;
+
   const rotateSeconds = Math.max(Number(config.rotateSeconds) || DEFAULTS.rotateSeconds, 1);
   const state = readJson(STATE_PATH) ?? {};
   const offset = Math.max(Number(state.offset) || 0, 0);
@@ -182,7 +253,7 @@ export async function main() {
   const providerOpts = providerOptsFrom(config);
   const cache = readJson(CACHE_PATH) ?? {};
   const ttlMs = Math.max(Number(config.cacheTtlSeconds) || DEFAULTS.cacheTtlSeconds, 5) * 1000;
-  const stale = symbols.filter((s) => !cache[s] || Date.now() - cache[s].ts >= ttlMs);
+  const stale = fetchSet.filter((s) => !cache[s] || Date.now() - cache[s].ts >= ttlMs);
   if (stale.length) {
     const fetched = await Promise.all(stale.map((s) => resolveQuote(s, providerOpts)));
     let updated = false;
@@ -197,14 +268,29 @@ export async function main() {
       writeJsonAtomic(CACHE_PATH, cache);
     }
   }
-  const quote = cache[symbol];
 
-  const left = formatQuote(symbol, quote, {
-    index,
-    total: symbols.length,
-    sparkPoints: Math.max(Number(config.sparkPoints) || DEFAULTS.sparkPoints, 2),
-    hyperlink: config.hyperlink !== false,
-  });
+  const fields = { volume: !!config.showVolume, dayRange: !!config.showDayRange, week52: !!config.show52w };
+  const alertPercent = Number(config.alertPercent) || 0;
+
+  let left;
+  let primaryQuote;
+  if (effLayout === 'compact') {
+    primaryQuote = cache[symbols[0]];
+    left = renderCompact(symbols, cache, { alertPercent });
+  } else if (effLayout === 'portfolio') {
+    primaryQuote = cache[fetchSet[0]];
+    left = renderPortfolio(holdings, cache, { alertPercent });
+  } else {
+    primaryQuote = cache[symbol];
+    left = formatQuote(symbol, cache[symbol], {
+      index,
+      total: symbols.length,
+      sparkPoints: Math.max(Number(config.sparkPoints) || DEFAULTS.sparkPoints, 2),
+      hyperlink: config.hyperlink !== false,
+      fields,
+      alertPercent,
+    });
+  }
 
   let right = '';
   if (config.showSession !== false) {
@@ -222,7 +308,7 @@ export async function main() {
   const frame = !cur.dotFrame;
   writeJsonAtomic(STATE_PATH, { ...cur, dotFrame: frame });
 
-  const line = `${marketDot(quote, Date.now(), frame)} ${left}`;
+  const line = `${marketDot(primaryQuote, Date.now(), frame)} ${left}`;
   console.log(right ? `${line}  ${DIM}│${RESET}  ${right}` : line);
 }
 

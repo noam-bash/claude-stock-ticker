@@ -40,6 +40,10 @@ All user preferences live in `~/.claude/stock-ticker.json`:
 - `hyperlink` — the symbol is an OSC 8 link to its Yahoo Finance page (Ctrl/Cmd+click). Set `false` if the user's terminal garbles the escapes; if links show but aren't clickable, suggest launching Claude Code with `FORCE_HYPERLINK=1`.
 - `providers` — override the fallback chain order, e.g. `["yahoo","finnhub","coingecko"]`. Default: Yahoo (two hosts), then CoinGecko for known crypto symbols, then Finnhub if a key is set.
 - `finnhubKey` — optional Finnhub API key (or set `FINNHUB_API_KEY` in the environment) to enable the Finnhub fallback.
+- `layout` — `rotate` (default, one symbol at a time), `compact` (all symbols on one line), or `portfolio` (totals from `holdings`).
+- `holdings` — for `portfolio` layout: `{ "SYMBOL": qty }` or `{ "SYMBOL": { "qty": n } }`. Shows total value + day P/L.
+- `showVolume` / `showDayRange` / `show52w` — opt-in fields appended in rotate mode (default off).
+- `alertPercent` — bold the change with a `!` when its daily move meets this percent.
 
 ### Doctor (`/ticker doctor`)
 
